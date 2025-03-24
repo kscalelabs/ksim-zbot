@@ -27,7 +27,7 @@ version: str = version_re.group(1)
 setup(
     name="ksim-zbot",
     version=version,
-    description="The ksim-zbot project",
+    description="Policies for Z-Bot",
     author="K-Scale Labs",
     url="https://github.com/kscalelabs/ksim-zbot",
     long_description=long_description,
