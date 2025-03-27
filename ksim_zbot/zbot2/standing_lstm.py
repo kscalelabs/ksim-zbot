@@ -16,10 +16,10 @@ from jaxtyping import Array, PRNGKeyArray
 
 from .standing import AuxOutputs, KbotStandingTask, KbotStandingTaskConfig
 
-OBS_SIZE = 20 * 2 + 3 + 3  # = 46 position + velocity + imu_acc + imu_gyro
+OBS_SIZE = 18 * 2 + 3 + 3  # = 42 position + velocity + imu_acc + imu_gyro
 CMD_SIZE = 2
 NUM_INPUTS = OBS_SIZE + CMD_SIZE
-NUM_OUTPUTS = 20 * 2  # position + velocity
+NUM_OUTPUTS = 18 * 2  # position + velocity
 
 HIDDEN_SIZE = 128  # LSTM hidden state size
 DEPTH = 2  # Number of LSTM layers
@@ -238,8 +238,8 @@ class KbotStandingLSTMTask(KbotStandingTask[Config], Generic[Config]):
         return [
             ksim.JointPositionObservation(noise=0.02),
             ksim.JointVelocityObservation(noise=0.2),
-            ksim.SensorObservation.create(physics_model, "imu_acc", noise=0.8),
-            ksim.SensorObservation.create(physics_model, "imu_gyro", noise=0.1),
+            ksim.SensorObservation.create(physics_model, "IMU_acc", noise=0.8),
+            ksim.SensorObservation.create(physics_model, "IMU_gyro", noise=0.1),
             ksim.ActuatorForceObservation(),
         ]
 
@@ -265,9 +265,9 @@ class KbotStandingLSTMTask(KbotStandingTask[Config], Generic[Config]):
     ) -> tuple[distrax.Normal, Array]:
         joint_pos_n = observations["joint_position_observation"]
         joint_vel_n = observations["joint_velocity_observation"]
-        imu_acc_n = observations["imu_acc_obs"]
-        imu_gyro_n = observations["imu_gyro_obs"]
-        lin_vel_cmd_n = commands["linear_velocity_command"]
+        imu_acc_n = observations["IMU_acc_obs"]
+        imu_gyro_n = observations["IMU_gyro_obs"]
+        lin_vel_cmd_n = commands["linear_velocity_step_command"]
         return model.actor(joint_pos_n, joint_vel_n, imu_acc_n, imu_gyro_n, lin_vel_cmd_n, carry)
 
     def _run_critic(
@@ -278,9 +278,9 @@ class KbotStandingLSTMTask(KbotStandingTask[Config], Generic[Config]):
     ) -> Array:
         joint_pos_n = observations["joint_position_observation"]
         joint_vel_n = observations["joint_velocity_observation"]
-        imu_acc_n = observations["imu_acc_obs"]
-        imu_gyro_n = observations["imu_gyro_obs"]
-        lin_vel_cmd_n = commands["linear_velocity_command"]
+        imu_acc_n = observations["IMU_acc_obs"]
+        imu_gyro_n = observations["IMU_gyro_obs"]
+        lin_vel_cmd_n = commands["linear_velocity_step_command"]
         return model.critic(joint_pos_n, joint_vel_n, imu_acc_n, imu_gyro_n, lin_vel_cmd_n)
 
     def get_log_probs(
@@ -376,7 +376,7 @@ if __name__ == "__main__":
     KbotStandingLSTMTask.launch(
         KbotStandingLSTMTaskConfig(
             num_envs=2048,
-            num_batches=64,
+            batch_size=64,
             num_passes=10,
             # Simulation parameters.
             dt=0.002,

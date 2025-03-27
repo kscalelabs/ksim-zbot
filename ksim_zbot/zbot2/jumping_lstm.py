@@ -11,6 +11,7 @@ import xax
 from jaxtyping import Array
 from kscale.web.gen.api import JointMetadataOutput
 
+from .standing import LastActionObservation, HistoryObservation
 from .standing_lstm import KbotStandingLSTMTask, KbotStandingLSTMTaskConfig
 
 
@@ -62,17 +63,20 @@ class KbotJumpingLSTMTask(KbotStandingLSTMTask[KbotJumpingLSTMTaskConfig]):
         return [
             ksim.JointPositionObservation(noise=0.0),
             ksim.JointVelocityObservation(noise=0.0),
-            ksim.SensorObservation.create(physics_model, "imu_acc", noise=0.0),
-            ksim.SensorObservation.create(physics_model, "imu_gyro", noise=0.0),
+            ksim.SensorObservation.create(physics_model, "IMU_acc", noise=0.0),
+            ksim.SensorObservation.create(physics_model, "IMU_gyro", noise=0.0),
             ksim.ActuatorForceObservation(),
+            LastActionObservation(noise=0.0),
+            HistoryObservation(),
         ]
 
     def get_events(self, physics_model: ksim.PhysicsModel) -> list[ksim.Event]:
         return [
             ksim.PushEvent(
-                probability=0.0,
+                x_force=0.1,
+                y_force=0.1,
+                z_force=0.0,
                 interval_range=(2, 4),
-                linear_force_scale=0.1,
             ),
         ]
 
@@ -99,13 +103,13 @@ class KbotJumpingLSTMTask(KbotStandingLSTMTask[KbotJumpingLSTMTaskConfig]):
 
 if __name__ == "__main__":
     # To run training, use the following command:
-    #   python -m ksim_kbot.kbot2.jumping
+    #   python -m ksim_zbot.zbot2.jumping_lstm
     # To visualize the environment, use the following command:
-    #   python -m ksim_kbot.kbot2.jumping run_environment=True
+    #   python -m ksim_zbot.zbot2.jumping_lstm run_environment=True
     KbotJumpingLSTMTask.launch(
         KbotJumpingLSTMTaskConfig(
             num_envs=2048,
-            num_batches=64,
+            batch_size=64,
             num_passes=8,
             # Simulation parameters.
             dt=0.005,

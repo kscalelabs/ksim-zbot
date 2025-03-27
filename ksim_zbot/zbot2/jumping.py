@@ -8,10 +8,10 @@ import jax
 import jax.numpy as jnp
 import ksim
 import xax
-from jaxtyping import Array
+from jaxtyping import Array, PRNGKeyArray
 from kscale.web.gen.api import JointMetadataOutput
 
-from .standing import KbotStandingTask, KbotStandingTaskConfig
+from .standing import KbotStandingTask, KbotStandingTaskConfig, LastActionObservation, HistoryObservation
 
 
 @attrs.define(frozen=True, kw_only=True)
@@ -61,9 +61,10 @@ class KbotJumpingTask(KbotStandingTask[KbotJumpingTaskConfig]):
     def get_events(self, physics_model: ksim.PhysicsModel) -> list[ksim.Event]:
         return [
             ksim.PushEvent(
-                probability=0.001,
+                x_force=0.1,
+                y_force=0.1,
+                z_force=0.0,
                 interval_range=(1, 5),
-                linear_force_scale=0.1,
             ),
         ]
 
@@ -87,16 +88,31 @@ class KbotJumpingTask(KbotStandingTask[KbotJumpingTaskConfig]):
         else:
             return ksim.TorqueActuators()
 
+    def get_observations(self, physics_model: ksim.PhysicsModel) -> list[ksim.Observation]:
+        return [
+            ksim.JointPositionObservation(noise=0.0),
+            ksim.JointVelocityObservation(noise=0.0),
+            ksim.SensorObservation.create(physics_model, "IMU_acc", noise=0.0),
+            ksim.SensorObservation.create(physics_model, "IMU_gyro", noise=0.0),
+            ksim.ActuatorForceObservation(),
+            LastActionObservation(noise=0.0),
+            HistoryObservation(),
+        ]
+
+    def get_initial_carry(self, rng: PRNGKeyArray) -> Array:
+        from .standing import HISTORY_LENGTH, SINGLE_STEP_HISTORY_SIZE
+        return jnp.zeros(HISTORY_LENGTH * SINGLE_STEP_HISTORY_SIZE)
+
 
 if __name__ == "__main__":
     # To run training, use the following command:
-    #   python -m ksim_kbot.kbot2.jumping
+    #   python -m ksim_zbot.zbot2.jumping
     # To visualize the environment, use the following command:
-    #   python -m ksim_kbot.kbot2.jumping run_environment=True
+    #   python -m ksim_zbot.zbot2.jumping run_environment=True
     KbotJumpingTask.launch(
         KbotJumpingTaskConfig(
             num_envs=2048,
-            num_batches=64,
+            batch_size=64,
             num_passes=8,
             # Simulation parameters.
             dt=0.005,

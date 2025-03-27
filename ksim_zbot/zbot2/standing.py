@@ -17,11 +17,12 @@ import xax
 from flax.core import FrozenDict
 from jaxtyping import Array, PRNGKeyArray
 from kscale.web.gen.api import JointMetadataOutput
+from mujoco_scenes.mjcf import load_mjmodel
 from mujoco import mjx
 
-OBS_SIZE = 20 * 2 + 3 + 3 + 40  # = 46 position + velocity + imu_acc + imu_gyro + last_action
+OBS_SIZE = 18 * 2 + 3 + 3 + 36  # = 42 position + velocity + imu_acc + imu_gyro + last_action
 CMD_SIZE = 2
-NUM_OUTPUTS = 20 * 2  # position + velocity
+NUM_OUTPUTS = 18 * 2  # position + velocity
 
 SINGLE_STEP_HISTORY_SIZE = NUM_OUTPUTS + OBS_SIZE + CMD_SIZE
 
@@ -60,7 +61,7 @@ class JointDeviationPenalty(ksim.Reward):
 
     norm: xax.NormType = attrs.field(default="l2")
     joint_targets: tuple[float, ...] = attrs.field(
-        default=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        default=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     )
 
     def __call__(self, trajectory: ksim.Trajectory) -> Array:
@@ -72,7 +73,7 @@ class JointDeviationPenalty(ksim.Reward):
 class JointPositionObservation(ksim.Observation):
     noise: float = attrs.field(default=0.0)
     default_targets: tuple[float, ...] = attrs.field(
-        default=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        default=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     )
 
     def observe(self, rollout_state: ksim.RolloutVariables, rng: PRNGKeyArray) -> Array:
@@ -110,9 +111,7 @@ class ResetDefaultJointPosition(ksim.Reset):
             0.0,
             0.0,
             0.0,
-            0.0,
-            # qpos
-            0.0,
+            # qpos - removing 2 elements from the original 20 joint positions to match zbot's 18 joints
             0.0,
             0.0,
             0.0,
@@ -317,7 +316,7 @@ class KbotStandingTaskConfig(ksim.PPOConfig):
     """Config for the KBot walking task."""
 
     robot_urdf_path: str = xax.field(
-        value="ksim_kbot/kscale-assets/kbot-v2-lw-feet/",
+        value="ksim_zbot/kscale-assets/zbot-feet/",
         help="The path to the assets directory for the robot.",
     )
 
@@ -378,8 +377,9 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
         return optimizer
 
     def get_mujoco_model(self) -> mujoco.MjModel:
-        mjcf_path = (Path(self.config.robot_urdf_path) / "scene.mjcf").resolve().as_posix()
-        mj_model = mujoco.MjModel.from_xml_path(mjcf_path)
+        # mjcf_path = (Path(self.config.robot_urdf_path) / "scene.mjcf").resolve().as_posix()
+        mjcf_path = (Path(self.config.robot_urdf_path) / "robot.mjcf").resolve().as_posix()
+        mj_model = load_mjmodel(mjcf_path, scene="smooth")
 
         mj_model.opt.timestep = jnp.array(self.config.dt)
         mj_model.opt.iterations = 6
@@ -415,12 +415,10 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
                     MAX_TORQUE["03"],
                     MAX_TORQUE["03"],
                     MAX_TORQUE["02"],
-                    MAX_TORQUE["02"],
                     MAX_TORQUE["00"],
                     # left arm
                     MAX_TORQUE["03"],
                     MAX_TORQUE["03"],
-                    MAX_TORQUE["02"],
                     MAX_TORQUE["02"],
                     MAX_TORQUE["00"],
                     # right leg
@@ -445,7 +443,7 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
             ksim.StaticFrictionRandomization(scale_lower=0.5, scale_upper=2.0),
             ksim.JointZeroPositionRandomization(scale_lower=-0.05, scale_upper=0.05),
             ksim.ArmatureRandomization(scale_lower=1.0, scale_upper=1.05),
-            ksim.MassMultiplicationRandomization.from_body_name(physics_model, "Torso_Side_Right"),
+            ksim.MassMultiplicationRandomization.from_body_name(physics_model, "Z_BOT2_MASTER_BODY_SKELETON"),
             ksim.JointDampingRandomization(scale_lower=0.95, scale_upper=1.05),
             # ksim.FloorFrictionRandomization.from_body_name(
             #     model=physics_model,
@@ -474,9 +472,7 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
                     0.0,
                     0.0,
                     0.0,
-                    0.0,
                     # left arm
-                    0.0,
                     0.0,
                     0.0,
                     0.0,
@@ -511,15 +507,14 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
         return [
             # ksim.JointPositionObservation(noise=0.02),
             JointPositionObservation(
+                noise=0.05,
                 default_targets=(
                     # right arm
                     0.0,
                     0.0,
                     0.0,
                     0.0,
-                    0.0,
                     # left arm
-                    0.0,
                     0.0,
                     0.0,
                     0.0,
@@ -540,8 +535,8 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
             ),
             ksim.JointVelocityObservation(noise=0.5),
             ksim.ActuatorForceObservation(),
-            ksim.SensorObservation.create(physics_model, "imu_acc", noise=0.5),
-            ksim.SensorObservation.create(physics_model, "imu_gyro", noise=0.2),
+            ksim.SensorObservation.create(physics_model, "IMU_acc", noise=0.5),
+            ksim.SensorObservation.create(physics_model, "IMU_gyro", noise=0.2),
             LastActionObservation(noise=0.0),
             HistoryObservation(),
         ]
@@ -572,9 +567,7 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
                     0.0,
                     0.0,
                     0.0,
-                    0.0,
                     # left arm
-                    0.0,
                     0.0,
                     0.0,
                     0.0,
@@ -623,8 +616,8 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
     ) -> distrax.Normal:
         joint_pos_n = observations["joint_position_observation"]
         joint_vel_n = observations["joint_velocity_observation"]
-        imu_acc_3 = observations["imu_acc_obs"]
-        imu_gyro_3 = observations["imu_gyro_obs"]
+        imu_acc_3 = observations["IMU_acc_obs"]
+        imu_gyro_3 = observations["IMU_gyro_obs"]
         lin_vel_cmd_2 = commands["linear_velocity_step_command"]
         last_action_n = observations["last_action_observation"]
         history_n = observations["history_observation"]
@@ -638,8 +631,8 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
     ) -> Array:
         joint_pos_n = observations["joint_position_observation"]
         joint_vel_n = observations["joint_velocity_observation"]
-        imu_acc_3 = observations["imu_acc_obs"]
-        imu_gyro_3 = observations["imu_gyro_obs"]
+        imu_acc_3 = observations["IMU_acc_obs"]
+        imu_gyro_3 = observations["IMU_gyro_obs"]
         lin_vel_cmd_2 = commands["linear_velocity_step_command"]
         last_action_n = observations["last_action_observation"]
         history_n = observations["history_observation"]
@@ -714,8 +707,8 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
 
         joint_pos_n = observations["joint_position_observation"]
         joint_vel_n = observations["joint_velocity_observation"]
-        imu_acc_3 = observations["imu_acc_obs"]
-        imu_gyro_3 = observations["imu_gyro_obs"]
+        imu_acc_3 = observations["IMU_acc_obs"]
+        imu_gyro_3 = observations["IMU_gyro_obs"]
         lin_vel_cmd_2 = commands["linear_velocity_step_command"]
         last_action_n = observations["last_action_observation"]
         history_n = jnp.concatenate(

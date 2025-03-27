@@ -16,12 +16,15 @@ import xax
 from flax.core import FrozenDict
 from jaxtyping import Array, PRNGKeyArray
 from kscale.web.gen.api import JointMetadataOutput
+from mujoco_scenes.mjcf import load_mjmodel
 from mujoco import mjx
 
-OBS_SIZE = 445
+from .standing import LastActionObservation, HistoryObservation, DHControlPenalty, DHHealthyReward
+
+OBS_SIZE = 401
 CMD_SIZE = 2
 NUM_INPUTS = OBS_SIZE + CMD_SIZE
-NUM_OUTPUTS = 20
+NUM_OUTPUTS = 18
 
 
 @jax.tree_util.register_dataclass
@@ -36,10 +39,14 @@ class JointDeviationPenalty(ksim.Reward):
     """Penalty for joint deviations."""
 
     def __call__(self, trajectory: ksim.Trajectory) -> Array:
-        diff = trajectory.qpos[:, 7:] - jnp.zeros_like(trajectory.qpos[:, 7:])
-        x = jnp.sum(jnp.square(diff), axis=-1)
-        # y = jnp.abs(diff)
-        # y2 = jnp.exp(-2 * jnp.abs(diff)) - 0.2 * jnp.abs(diff).clip(0, 0.5)
+        # Handle both 1D and 2D arrays
+        if trajectory.qpos.ndim > 1:
+            diff = trajectory.qpos[:, 7:] - jnp.zeros_like(trajectory.qpos[:, 7:])
+            x = jnp.sum(jnp.square(diff), axis=-1)
+        else:
+            # 1D case for run_environment mode
+            diff = trajectory.qpos[7:] - jnp.zeros_like(trajectory.qpos[7:])
+            x = jnp.sum(jnp.square(diff))
         return x
 
 
@@ -50,7 +57,11 @@ class HeightReward(ksim.Reward):
     height_target: float = attrs.field(default=1.4)
 
     def __call__(self, trajectory: ksim.Trajectory) -> Array:
-        height = trajectory.qpos[:, 2]
+        if trajectory.qpos.ndim > 1:
+            height = trajectory.qpos[:, 2]
+        else:
+            # 1D case for run_environment mode
+            height = trajectory.qpos[2]
         reward = jnp.exp(-jnp.abs(height - self.height_target) * 10)
         return reward
 
@@ -59,8 +70,8 @@ class HeightReward(ksim.Reward):
 class DHJointVelocityObservation(ksim.Observation):
     noise: float = attrs.field(default=0.0)
 
-    def observe(self, state: ksim.PhysicsData, rng: PRNGKeyArray) -> Array:
-        qvel = state.qvel  # (N,)
+    def observe(self, rollout_state: ksim.RolloutVariables, rng: PRNGKeyArray) -> Array:
+        qvel = rollout_state.physics_state.data.qvel  # (N,)
         return qvel
 
     def add_noise(self, observation: Array, rng: PRNGKeyArray) -> Array:
@@ -71,8 +82,8 @@ class DHJointVelocityObservation(ksim.Observation):
 class DHJointPositionObservation(ksim.Observation):
     noise: float = attrs.field(default=0.0)
 
-    def observe(self, state: ksim.PhysicsData, rng: PRNGKeyArray) -> Array:
-        qpos = state.qpos[2:]  # (N,)
+    def observe(self, rollout_state: ksim.RolloutVariables, rng: PRNGKeyArray) -> Array:
+        qpos = rollout_state.physics_state.data.qpos[2:]  # (N,)
         return qpos
 
     def add_noise(self, observation: Array, rng: PRNGKeyArray) -> Array:
@@ -85,7 +96,10 @@ class DHForwardReward(ksim.Reward):
 
     def __call__(self, trajectory: ksim.Trajectory) -> Array:
         # Take just the x velocity component
-        x_delta = -jnp.clip(trajectory.qvel[..., 1], -1.0, 1.0)
+        if trajectory.qvel.ndim > 1:
+            x_delta = -jnp.clip(trajectory.qvel[..., 1], -1.0, 1.0)
+        else:
+            x_delta = -jnp.clip(trajectory.qvel[1], -1.0, 1.0)
         return x_delta
 
 
@@ -105,7 +119,10 @@ class DHHealthyReward(ksim.Reward):
     healthy_z_upper: float = attrs.field(default=1.5)
 
     def __call__(self, trajectory: ksim.Trajectory) -> Array:
-        height = trajectory.qpos[:, 2]
+        if trajectory.qpos.ndim > 1:
+            height = trajectory.qpos[:, 2]
+        else:
+            height = trajectory.qpos[2]
         is_healthy = jnp.where(height < self.healthy_z_lower, 0.0, 1.0)
         is_healthy = jnp.where(height > self.healthy_z_upper, 0.0, is_healthy)
         return is_healthy
@@ -237,7 +254,7 @@ class KbotWalkingTaskConfig(ksim.PPOConfig):
     """Config for the KBot walking task."""
 
     robot_urdf_path: str = xax.field(
-        value="examples/kscale-assets/kbot-v2-feet/",
+        value="ksim_zbot/kscale-assets/zbot-feet/",
         help="The path to the assets directory for the robot.",
     )
 
@@ -314,8 +331,8 @@ class KbotWalkingTask(ksim.PPOTask[KbotWalkingTaskConfig]):
         return optimizer
 
     def get_mujoco_model(self) -> mujoco.MjModel:
-        mjcf_path = (Path(__file__).parent / "scene.mjcf").resolve().as_posix()
-        mj_model = mujoco.MjModel.from_xml_path(mjcf_path)
+        mjcf_path = (Path(self.config.robot_urdf_path) / "robot.mjcf").resolve().as_posix()
+        mj_model = load_mjmodel(mjcf_path, scene="smooth")
 
         mj_model.opt.timestep = jnp.array(self.config.dt)
         mj_model.opt.iterations = 6
@@ -347,7 +364,11 @@ class KbotWalkingTask(ksim.PPOTask[KbotWalkingTaskConfig]):
 
     def get_randomization(self, physics_model: ksim.PhysicsModel) -> list[ksim.Randomization]:
         return [
-            ksim.WeightRandomization(scale=0.01),
+            ksim.StaticFrictionRandomization(scale_lower=0.5, scale_upper=2.0),
+            ksim.JointZeroPositionRandomization(scale_lower=-0.05, scale_upper=0.05),
+            ksim.ArmatureRandomization(scale_lower=1.0, scale_upper=1.05),
+            ksim.MassMultiplicationRandomization.from_body_name(physics_model, "Z_BOT2_MASTER_BODY_SKELETON"),
+            ksim.JointDampingRandomization(scale_lower=0.95, scale_upper=1.05),
         ]
 
     def get_resets(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reset]:
@@ -363,11 +384,24 @@ class KbotWalkingTask(ksim.PPOTask[KbotWalkingTaskConfig]):
             ksim.ActuatorForceObservation(),
             ksim.CenterOfMassInertiaObservation(),
             ksim.CenterOfMassVelocityObservation(),
+            LastActionObservation(noise=0.0),
+            HistoryObservation(),
         ]
 
     def get_commands(self, physics_model: ksim.PhysicsModel) -> list[ksim.Command]:
         return [
-            ksim.LinearVelocityCommand(x_range=(-0.1, 0.1), y_range=(-0.1, 0.1), switch_prob=0.0, zero_prob=0.0),
+            ksim.LinearVelocityStepCommand(
+                x_range=(-0.1, 0.1),
+                y_range=(-0.1, 0.1),
+                x_fwd_prob=0.5,
+                y_fwd_prob=0.5,
+                x_zero_prob=0.0,
+                y_zero_prob=0.0,
+            ),
+            ksim.AngularVelocityStepCommand(
+                scale=0.0,
+                zero_prob=1.0,
+            ),
         ]
 
     # from ksim.rewards import AngularVelocityXYPenalty, LinearVelocityZPenalty,TerminationPenalty, JointVelocityPenalty
@@ -399,11 +433,22 @@ class KbotWalkingTask(ksim.PPOTask[KbotWalkingTaskConfig]):
             # FastAccelerationTermination(),
         ]
 
+    def get_events(self, physics_model: ksim.PhysicsModel) -> list[ksim.Event]:
+        return [
+            ksim.PushEvent(
+                x_force=0.2,
+                y_force=0.2,
+                z_force=0.0,
+                interval_range=(1.0, 2.0),
+            ),
+        ]
+
     def get_model(self, key: PRNGKeyArray) -> KbotModel:
         return KbotModel(key)
 
-    def get_initial_carry(self, rng: PRNGKeyArray) -> None:
-        return None
+    def get_initial_carry(self, rng: PRNGKeyArray) -> Array:
+        from .standing import HISTORY_LENGTH, SINGLE_STEP_HISTORY_SIZE
+        return jnp.zeros(HISTORY_LENGTH * SINGLE_STEP_HISTORY_SIZE)
 
     def _run_actor(
         self,
@@ -416,7 +461,7 @@ class KbotWalkingTask(ksim.PPOTask[KbotWalkingTaskConfig]):
         com_inertia_n = observations["center_of_mass_inertia_observation"]
         com_vel_n = observations["center_of_mass_velocity_observation"]
         act_frc_obs_n = observations["actuator_force_observation"] / 100.0
-        lin_vel_cmd_n = commands["linear_velocity_command"]
+        lin_vel_cmd_n = commands["linear_velocity_step_command"]
         return model.actor(dh_joint_pos_n, dh_joint_vel_n, com_inertia_n, com_vel_n, act_frc_obs_n, lin_vel_cmd_n)
 
     def _run_critic(
@@ -430,7 +475,7 @@ class KbotWalkingTask(ksim.PPOTask[KbotWalkingTaskConfig]):
         com_inertia_n = observations["center_of_mass_inertia_observation"]
         com_vel_n = observations["center_of_mass_velocity_observation"]
         act_frc_obs_n = observations["actuator_force_observation"] / 100.0
-        lin_vel_cmd_n = commands["linear_velocity_command"]
+        lin_vel_cmd_n = commands["linear_velocity_step_command"]
         return model.critic(dh_joint_pos_n, dh_joint_vel_n, com_inertia_n, com_vel_n, act_frc_obs_n, lin_vel_cmd_n)
 
     def get_on_policy_log_probs(
@@ -487,12 +532,12 @@ class KbotWalkingTask(ksim.PPOTask[KbotWalkingTaskConfig]):
     def sample_action(
         self,
         model: KbotModel,
-        carry: None,
+        carry: Array,
         physics_model: ksim.PhysicsModel,
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
         rng: PRNGKeyArray,
-    ) -> tuple[Array, None, AuxOutputs]:
+    ) -> tuple[Array, Array, AuxOutputs]:
         action_dist_n = self._run_actor(model, observations, commands)
         action_n = action_dist_n.sample(seed=rng) * self.config.action_scale
         action_log_prob_n = action_dist_n.log_prob(action_n)
@@ -500,7 +545,38 @@ class KbotWalkingTask(ksim.PPOTask[KbotWalkingTaskConfig]):
         critic_n = self._run_critic(model, observations, commands)
         value_n = critic_n.squeeze(-1)
 
-        return action_n, None, AuxOutputs(log_probs=action_log_prob_n, values=value_n)
+        joint_pos_n = observations["dhjoint_position_observation"]
+        joint_vel_n = observations["dhjoint_velocity_observation"]
+        com_inertia_n = observations["center_of_mass_inertia_observation"]
+        com_vel_n = observations["center_of_mass_velocity_observation"]
+        act_frc_obs_n = observations["actuator_force_observation"]
+        lin_vel_cmd_n = commands["linear_velocity_step_command"]
+        last_action_n = observations["last_action_observation"]
+        history_n = jnp.concatenate(
+            [
+                joint_pos_n,
+                joint_vel_n,
+                com_inertia_n,
+                com_vel_n,
+                act_frc_obs_n,
+                lin_vel_cmd_n,
+                last_action_n,
+                action_n,
+            ],
+            axis=-1,
+        )
+
+        from .standing import HISTORY_LENGTH, SINGLE_STEP_HISTORY_SIZE
+        if HISTORY_LENGTH > 0:
+            # Roll the history by shifting the existing history and adding the new data
+            carry_reshaped = carry.reshape(HISTORY_LENGTH, SINGLE_STEP_HISTORY_SIZE)
+            shifted_history = jnp.roll(carry_reshaped, shift=-1, axis=0)
+            new_history = shifted_history.at[HISTORY_LENGTH - 1].set(history_n)
+            history_n = new_history.reshape(-1)
+        else:
+            history_n = jnp.zeros(0)
+
+        return action_n, history_n, AuxOutputs(log_probs=action_log_prob_n, values=value_n)
 
     def on_after_checkpoint_save(self, ckpt_path: Path, state: xax.State) -> xax.State:
         state = super().on_after_checkpoint_save(ckpt_path, state)
@@ -521,11 +597,11 @@ class KbotWalkingTask(ksim.PPOTask[KbotWalkingTaskConfig]):
 
 
 if __name__ == "__main__":
-    # python -m ksim_kbot.kbot2.walking run_environment=True
+    # python -m ksim_zbot.zbot2.walking run_environment=True
     KbotWalkingTask.launch(
         KbotWalkingTaskConfig(
             num_envs=4096,
-            num_batches=64,
+            batch_size=64,
             num_passes=10,
             # Simulation parameters.
             dt=0.002,
