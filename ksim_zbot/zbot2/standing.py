@@ -472,29 +472,24 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
                     0.0,
                     0.0,
                     0.0,
-                    # right arm
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    # left arm
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    # right leg
                     0.0,
                     0.0,
                     0.0,
                     0.0,
                     0.0,
-                    # left leg
                     0.0,
                     0.0,
                     0.0,
                     0.0,
                     0.0,
-                    # two additional joints for the 6dof model with feet
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
                     0.0,
                     0.0
                 )
@@ -503,12 +498,12 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
 
     def get_events(self, physics_model: ksim.PhysicsModel) -> list[ksim.Event]:
         return [
-            ksim.PushEvent(
-                x_force=0.2,
-                y_force=0.2,
-                z_force=0.0,
-                interval_range=(1.0, 2.0),
-            ),
+            # ksim.PushEvent(
+            #     x_force=0.2,
+            #     y_force=0.2,
+            #     z_force=0.0,
+            #     interval_range=(1.0, 2.0),
+            # ),
         ]
 
     def get_observations(self, physics_model: ksim.PhysicsModel) -> list[ksim.Observation]:
@@ -528,18 +523,16 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
                     0.0,
                     0.0,
                     # right leg
-                    -0.23,
                     0.0,
                     0.0,
-                    -0.441,
-                    0.195,
-                    # left leg
-                    0.23,
                     0.0,
                     0.0,
-                    0.441,
-                    -0.195,
-                    # additional joints for feet
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
                     0.0,
                     0.0
                 )
@@ -584,26 +577,24 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
                     0.0,
                     0.0,
                     # right leg
-                    -0.23,
                     0.0,
                     0.0,
-                    -0.441,
-                    0.195,
-                    # left leg
-                    0.23,
                     0.0,
                     0.0,
-                    0.441,
-                    -0.195,
-                    # additional joints for feet
                     0.0,
-                    0.0
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
                 ),
             ),
             DHControlPenalty(scale=-0.05),
             DHHealthyReward(scale=0.5),
             ksim.ActuatorForcePenalty(scale=-0.01),
-            ksim.BaseHeightReward(scale=1.0, height_target=0.9),
+            ksim.BaseHeightReward(scale=1.0, height_target=0.4),
             ksim.LinearVelocityTrackingPenalty(command_name="linear_velocity_step_command", scale=-0.05),
             ksim.AngularVelocityTrackingPenalty(command_name="angular_velocity_step_command", scale=-0.05),
             # FeetSlipPenalty(scale=-0.01),
