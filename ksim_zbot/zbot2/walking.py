@@ -16,10 +16,10 @@ import xax
 from flax.core import FrozenDict
 from jaxtyping import Array, PRNGKeyArray
 from kscale.web.gen.api import JointMetadataOutput
-from mujoco_scenes.mjcf import load_mjmodel
 from mujoco import mjx
+from mujoco_scenes.mjcf import load_mjmodel
 
-from .standing import LastActionObservation, HistoryObservation, DHControlPenalty, DHHealthyReward
+from .standing import DHControlPenalty, DHHealthyReward, HistoryObservation, LastActionObservation
 
 OBS_SIZE = 401
 CMD_SIZE = 2
@@ -101,31 +101,6 @@ class DHForwardReward(ksim.Reward):
         else:
             x_delta = -jnp.clip(trajectory.qvel[1], -1.0, 1.0)
         return x_delta
-
-
-@attrs.define(frozen=True, kw_only=True)
-class DHControlPenalty(ksim.Reward):
-    """Legacy default humanoid control cost that penalizes squared action magnitude."""
-
-    def __call__(self, trajectory: ksim.Trajectory) -> Array:
-        return jnp.sum(jnp.square(trajectory.action), axis=-1)
-
-
-@attrs.define(frozen=True, kw_only=True)
-class DHHealthyReward(ksim.Reward):
-    """Legacy default humanoid healthy reward that gives binary reward based on height."""
-
-    healthy_z_lower: float = attrs.field(default=0.5)
-    healthy_z_upper: float = attrs.field(default=1.5)
-
-    def __call__(self, trajectory: ksim.Trajectory) -> Array:
-        if trajectory.qpos.ndim > 1:
-            height = trajectory.qpos[:, 2]
-        else:
-            height = trajectory.qpos[2]
-        is_healthy = jnp.where(height < self.healthy_z_lower, 0.0, 1.0)
-        is_healthy = jnp.where(height > self.healthy_z_upper, 0.0, is_healthy)
-        return is_healthy
 
 
 class KbotActor(eqx.Module):
@@ -448,6 +423,7 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig]):
 
     def get_initial_carry(self, rng: PRNGKeyArray) -> Array:
         from .standing import HISTORY_LENGTH, SINGLE_STEP_HISTORY_SIZE
+
         return jnp.zeros(HISTORY_LENGTH * SINGLE_STEP_HISTORY_SIZE)
 
     def _run_actor(
@@ -567,6 +543,7 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig]):
         )
 
         from .standing import HISTORY_LENGTH, SINGLE_STEP_HISTORY_SIZE
+
         if HISTORY_LENGTH > 0:
             # Roll the history by shifting the existing history and adding the new data
             carry_reshaped = carry.reshape(HISTORY_LENGTH, SINGLE_STEP_HISTORY_SIZE)

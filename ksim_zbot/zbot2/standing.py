@@ -17,8 +17,8 @@ import xax
 from flax.core import FrozenDict
 from jaxtyping import Array, PRNGKeyArray
 from kscale.web.gen.api import JointMetadataOutput
-from mujoco_scenes.mjcf import load_mjmodel
 from mujoco import mjx
+from mujoco_scenes.mjcf import load_mjmodel
 
 OBS_SIZE = 20 * 2 + 3 + 3 + 40  # = 46 position + velocity + imu_acc + imu_gyro + last_action
 CMD_SIZE = 2
@@ -131,7 +131,7 @@ class ResetDefaultJointPosition(ksim.Reset):
             0.0,
             0.0,
             0.0,
-            0.0
+            0.0,
         )
     )
 
@@ -491,7 +491,7 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
                     0.0,
                     0.0,
                     0.0,
-                    0.0
+                    0.0,
                 )
             ),
         ]
@@ -534,8 +534,8 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
                     0.0,
                     0.0,
                     0.0,
-                    0.0
-                )
+                    0.0,
+                ),
             ),
             ksim.JointVelocityObservation(noise=0.5),
             ksim.ActuatorForceObservation(),

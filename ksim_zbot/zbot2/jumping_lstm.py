@@ -11,7 +11,7 @@ import xax
 from jaxtyping import Array
 from kscale.web.gen.api import JointMetadataOutput
 
-from .standing import LastActionObservation, HistoryObservation
+from .standing import HistoryObservation, LastActionObservation
 from .standing_lstm import ZbotStandingLSTMTask, ZbotStandingLSTMTaskConfig
 
 

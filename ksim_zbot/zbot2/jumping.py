@@ -11,7 +11,7 @@ import xax
 from jaxtyping import Array, PRNGKeyArray
 from kscale.web.gen.api import JointMetadataOutput
 
-from .standing import ZbotStandingTask, ZbotStandingTaskConfig, LastActionObservation, HistoryObservation
+from .standing import HistoryObservation, LastActionObservation, ZbotStandingTask, ZbotStandingTaskConfig
 
 
 @attrs.define(frozen=True, kw_only=True)
@@ -101,6 +101,7 @@ class ZbotJumpingTask(ZbotStandingTask[ZbotJumpingTaskConfig]):
 
     def get_initial_carry(self, rng: PRNGKeyArray) -> Array:
         from .standing import HISTORY_LENGTH, SINGLE_STEP_HISTORY_SIZE
+
         return jnp.zeros(HISTORY_LENGTH * SINGLE_STEP_HISTORY_SIZE)
 
 
