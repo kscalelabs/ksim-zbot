@@ -20,9 +20,9 @@ from kscale.web.gen.api import JointMetadataOutput
 from mujoco_scenes.mjcf import load_mjmodel
 from mujoco import mjx
 
-OBS_SIZE = 18 * 2 + 3 + 3 + 36  # = 42 position + velocity + imu_acc + imu_gyro + last_action
+OBS_SIZE = 20 * 2 + 3 + 3 + 40  # = 46 position + velocity + imu_acc + imu_gyro + last_action
 CMD_SIZE = 2
-NUM_OUTPUTS = 18 * 2  # position + velocity
+NUM_OUTPUTS = 20 * 2  # position + velocity
 
 SINGLE_STEP_HISTORY_SIZE = NUM_OUTPUTS + OBS_SIZE + CMD_SIZE
 
@@ -61,7 +61,7 @@ class JointDeviationPenalty(ksim.Reward):
 
     norm: xax.NormType = attrs.field(default="l2")
     joint_targets: tuple[float, ...] = attrs.field(
-        default=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        default=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     )
 
     def __call__(self, trajectory: ksim.Trajectory) -> Array:
@@ -73,7 +73,7 @@ class JointDeviationPenalty(ksim.Reward):
 class JointPositionObservation(ksim.Observation):
     noise: float = attrs.field(default=0.0)
     default_targets: tuple[float, ...] = attrs.field(
-        default=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        default=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     )
 
     def observe(self, rollout_state: ksim.RolloutVariables, rng: PRNGKeyArray) -> Array:
@@ -105,13 +105,13 @@ class ResetDefaultJointPosition(ksim.Reset):
             # xyz
             0.0,
             0.0,
-            0.0,
+            0.41,  # This is the starting height (Z coordinate)
             # quat
             1.0,
             0.0,
             0.0,
             0.0,
-            # qpos - removing 2 elements from the original 20 joint positions to match zbot's 18 joints
+            # qpos - 20 elements for zbot-6dof-feet's joint positions
             0.0,
             0.0,
             0.0,
@@ -130,6 +130,8 @@ class ResetDefaultJointPosition(ksim.Reset):
             0.0,
             0.0,
             0.0,
+            0.0,
+            0.0
         )
     )
 
@@ -316,7 +318,7 @@ class ZbotStandingTaskConfig(ksim.PPOConfig):
     """Config for the Z-Bot walking task."""
 
     robot_urdf_path: str = xax.field(
-        value="ksim_zbot/kscale-assets/zbot-feet/",
+        value="ksim_zbot/kscale-assets/zbot-6dof-feet/",
         help="The path to the assets directory for the robot.",
     )
 
@@ -433,6 +435,9 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
                     MAX_TORQUE["03"],
                     MAX_TORQUE["04"],
                     MAX_TORQUE["02"],
+                    # additional joints for feet
+                    MAX_TORQUE["00"],
+                    MAX_TORQUE["00"],
                 ],
             )
         else:
@@ -462,7 +467,7 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
                 default_targets=(
                     0.0,
                     0.0,
-                    0.91,
+                    0.40,  # Lower height from 0.91 to 0.41
                     1.0,
                     0.0,
                     0.0,
@@ -478,17 +483,20 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
                     0.0,
                     0.0,
                     # right leg
-                    -0.23,
                     0.0,
                     0.0,
-                    -0.441,
-                    0.195,
+                    0.0,
+                    0.0,
+                    0.0,
                     # left leg
-                    0.23,
                     0.0,
                     0.0,
-                    0.441,
-                    -0.195,
+                    0.0,
+                    0.0,
+                    0.0,
+                    # two additional joints for the 6dof model with feet
+                    0.0,
+                    0.0
                 )
             ),
         ]
@@ -531,6 +539,9 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
                     0.0,
                     0.441,
                     -0.195,
+                    # additional joints for feet
+                    0.0,
+                    0.0
                 )
             ),
             ksim.JointVelocityObservation(noise=0.5),
@@ -584,6 +595,9 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
                     0.0,
                     0.441,
                     -0.195,
+                    # additional joints for feet
+                    0.0,
+                    0.0
                 ),
             ),
             DHControlPenalty(scale=-0.05),
