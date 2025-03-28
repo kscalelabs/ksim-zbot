@@ -19,10 +19,11 @@ from jaxtyping import Array, PRNGKeyArray
 from kscale.web.gen.api import JointMetadataOutput
 from mujoco import mjx
 from mujoco_scenes.mjcf import load_mjmodel
+from xax.nn.export import export
 
-OBS_SIZE = 20 * 2 + 3 + 3 + 40  # = 46 position + velocity + imu_acc + imu_gyro + last_action
+OBS_SIZE = 20 * 2 + 3 + 3 + 20  # position + velocity + imu_acc + imu_gyro + last_action
 CMD_SIZE = 2
-NUM_OUTPUTS = 20 * 2  # position + velocity
+NUM_OUTPUTS = 20  # position only for FeetechActuators (not position + velocity)
 
 SINGLE_STEP_HISTORY_SIZE = NUM_OUTPUTS + OBS_SIZE + CMD_SIZE
 
@@ -30,11 +31,17 @@ HISTORY_LENGTH = 0
 
 NUM_INPUTS = (OBS_SIZE + CMD_SIZE) + SINGLE_STEP_HISTORY_SIZE * HISTORY_LENGTH
 
-MAX_TORQUE = {
-    "00": 1.0,
-    "02": 14.0,
-    "03": 40.0,
-    "04": 60.0,
+# Feetech parameters from Scott's modelling 
+FT_STS3215_PARAMS = {
+    "max_torque": 5.510764878546495,   # forcerange for sts3215_12v
+    "kp": 29.07744066635301,
+    "error_gain": 0.164787755,
+}
+
+FT_STS3250_PARAMS = {
+    "max_torque": 8.78317969605094,     # forcerange for sts3250
+    "kp": 45.88324107347177,
+    "error_gain": 0.163249681,
 }
 
 Config = TypeVar("Config", bound="ZbotStandingTaskConfig")
@@ -205,7 +212,7 @@ class ZbotActor(eqx.Module):
     ) -> None:
         self.mlp = eqx.nn.MLP(
             in_size=NUM_INPUTS,
-            out_size=NUM_OUTPUTS * 2,
+            out_size=NUM_OUTPUTS * 2,  # Still need mean and std for each output
             width_size=64,
             depth=5,
             key=key,
@@ -342,10 +349,7 @@ class ZbotStandingTaskConfig(ksim.PPOConfig):
     )
 
     # Mujoco parameters.
-    use_mit_actuators: bool = xax.field(
-        value=False,
-        help="Whether to use the MIT actuator model, where the actions are position + velocity commands",
-    )
+    # Removed use_mit_actuators config option since we're now using FeetechActuators directly
 
     # Rendering parameters.
     render_track_body_id: int | None = xax.field(
@@ -402,46 +406,17 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
         physics_model: ksim.PhysicsModel,
         metadata: dict[str, JointMetadataOutput] | None = None,
     ) -> ksim.Actuators:
-        if self.config.use_mit_actuators:
-            if metadata is None:
-                raise ValueError("Metadata is required for MIT actuators")
-            return ksim.MITPositionVelocityActuators(
-                physics_model,
-                metadata,
-                pos_action_noise=0.1,
-                vel_action_noise=0.1,
-                pos_action_noise_type="gaussian",
-                vel_action_noise_type="gaussian",
-                ctrl_clip=[
-                    # right arm
-                    MAX_TORQUE["03"],
-                    MAX_TORQUE["03"],
-                    MAX_TORQUE["02"],
-                    MAX_TORQUE["00"],
-                    # left arm
-                    MAX_TORQUE["03"],
-                    MAX_TORQUE["03"],
-                    MAX_TORQUE["02"],
-                    MAX_TORQUE["00"],
-                    # right leg
-                    MAX_TORQUE["04"],
-                    MAX_TORQUE["03"],
-                    MAX_TORQUE["03"],
-                    MAX_TORQUE["04"],
-                    MAX_TORQUE["02"],
-                    # left leg
-                    MAX_TORQUE["04"],
-                    MAX_TORQUE["03"],
-                    MAX_TORQUE["03"],
-                    MAX_TORQUE["04"],
-                    MAX_TORQUE["02"],
-                    # additional joints for feet
-                    MAX_TORQUE["00"],
-                    MAX_TORQUE["00"],
-                ],
-            )
-        else:
-            return ksim.TorqueActuators()
+        # We're using FeetechActuators which only requires position control (not position+velocity)
+        # This matches our model output which now only produces NUM_OUTPUTS=20 position values
+        return ksim.FeetechActuators(
+            max_torque=FT_STS3250_PARAMS["max_torque"],
+            kp=FT_STS3250_PARAMS["kp"],
+            error_gain=FT_STS3250_PARAMS["error_gain"],
+            action_noise=0.0,
+            action_noise_type="none",
+            torque_noise=0.0,
+            torque_noise_type="none",
+        )
 
     def get_randomization(self, physics_model: ksim.PhysicsModel) -> list[ksim.Randomization]:
         return [
@@ -777,7 +752,7 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
 
         input_shapes = [(NUM_INPUTS,)]
 
-        xax.export(  # type: ignore[operator]
+        export(  # type: ignore[operator]
             model_fn,
             input_shapes,
             ckpt_path.parent / "tf_model",
@@ -803,9 +778,9 @@ if __name__ == "__main__":
             ctrl_dt=0.02,
             max_action_latency=0.005,
             min_action_latency=0.0,
-            valid_every_n_steps=25,
+            valid_every_n_steps=5,
             valid_first_n_steps=0,
-            save_every_n_steps=25,
+            save_every_n_steps=5,
             rollout_length_seconds=5.0,
             # PPO parameters
             gamma=0.97,
@@ -814,7 +789,7 @@ if __name__ == "__main__":
             learning_rate=1e-4,
             clip_param=0.3,
             max_grad_norm=1.0,
-            use_mit_actuators=True,
+            # Removed use_mit_actuators since we're using FeetechActuators now
             export_for_inference=True,
         ),
     )
