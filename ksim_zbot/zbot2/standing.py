@@ -33,14 +33,16 @@ NUM_INPUTS = (OBS_SIZE + CMD_SIZE) + SINGLE_STEP_HISTORY_SIZE * HISTORY_LENGTH
 
 # Feetech parameters from Scott's modelling 
 FT_STS3215_PARAMS = {
-    "max_torque": 5.510764878546495,   # forcerange for sts3215_12v
+    "max_torque": 5.510764878546495,  # forcerange for sts3215_12v
     "kp": 29.07744066635301,
+    "kd": 1.1793454779199242,          # use the damping value as kd
     "error_gain": 0.164787755,
 }
 
 FT_STS3250_PARAMS = {
-    "max_torque": 8.78317969605094,     # forcerange for sts3250
+    "max_torque": 8.78317969605094,    # forcerange for sts3250
     "kp": 45.88324107347177,
+    "kd": 1.470804479204935,           # use the damping value as kd
     "error_gain": 0.163249681,
 }
 
@@ -406,11 +408,10 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
         physics_model: ksim.PhysicsModel,
         metadata: dict[str, JointMetadataOutput] | None = None,
     ) -> ksim.Actuators:
-        # We're using FeetechActuators which only requires position control (not position+velocity)
-        # This matches our model output which now only produces NUM_OUTPUTS=20 position values
         return ksim.FeetechActuators(
             max_torque=FT_STS3250_PARAMS["max_torque"],
             kp=FT_STS3250_PARAMS["kp"],
+            kd=FT_STS3250_PARAMS["kd"],
             error_gain=FT_STS3250_PARAMS["error_gain"],
             action_noise=0.0,
             action_noise_type="none",
