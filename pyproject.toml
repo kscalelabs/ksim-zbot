@@ -42,6 +42,7 @@ module = [
     "scipy.*",
     "_pytest.*",
     "orbax.*",
+    "flax.*"
 ]
 ignore_missing_imports = true
 
