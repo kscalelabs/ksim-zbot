@@ -360,7 +360,7 @@ class ZbotStandingLSTMTask(ZbotStandingTask[Config], Generic[Config]):
 
         input_shapes = [(NUM_INPUTS,), (DEPTH, 2, HIDDEN_SIZE)]
 
-        xax.export(
+        xax.export(  # type: ignore[operator]
             model_fn,
             input_shapes,
             ckpt_path.parent / "tf_model",

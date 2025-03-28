@@ -777,9 +777,9 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
 
         input_shapes = [(NUM_INPUTS,)]
 
-        xax.export(
+        xax.export(  # type: ignore[operator]
             model_fn,
-            input_shapes,  # type: ignore [arg-type]
+            input_shapes,
             ckpt_path.parent / "tf_model",
         )
 

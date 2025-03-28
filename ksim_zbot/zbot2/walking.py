@@ -568,7 +568,7 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig]):
             return model.actor.call_flat_obs(obs, cmd).mode()
 
         input_shapes = [(OBS_SIZE,), (CMD_SIZE,)]
-        xax.export(model_fn, input_shapes, ckpt_path.parent / "tf_model")  # type: ignore [arg-type]
+        xax.export(model_fn, input_shapes, ckpt_path.parent / "tf_model")  # type: ignore[operator]
 
         return state
 
