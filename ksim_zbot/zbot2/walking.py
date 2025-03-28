@@ -1,4 +1,4 @@
-"""Defines simple task for training a walking policy for K-Bot."""
+"""Defines simple task for training a walking policy for Z-Bot."""
 
 import asyncio
 from dataclasses import dataclass
@@ -250,8 +250,8 @@ class KbotModel(eqx.Module):
 
 
 @dataclass
-class KbotWalkingTaskConfig(ksim.PPOConfig):
-    """Config for the KBot walking task."""
+class ZbotWalkingTaskConfig(ksim.PPOConfig):
+    """Config for the ZBot walking task."""
 
     robot_urdf_path: str = xax.field(
         value="ksim_zbot/kscale-assets/zbot-feet/",
@@ -312,7 +312,7 @@ class KbotWalkingTaskConfig(ksim.PPOConfig):
     )
 
 
-class KbotWalkingTask(ksim.PPOTask[KbotWalkingTaskConfig]):
+class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig]):
     def get_optimizer(self) -> optax.GradientTransformation:
         """Builds the optimizer.
 
@@ -598,8 +598,8 @@ class KbotWalkingTask(ksim.PPOTask[KbotWalkingTaskConfig]):
 
 if __name__ == "__main__":
     # python -m ksim_zbot.zbot2.walking run_environment=True
-    KbotWalkingTask.launch(
-        KbotWalkingTaskConfig(
+    ZbotWalkingTask.launch(
+        ZbotWalkingTaskConfig(
             num_envs=4096,
             batch_size=64,
             num_passes=10,

@@ -1,5 +1,5 @@
 # mypy: disable-error-code="override"
-"""Defines simple task for training a walking policy for K-Bot."""
+"""Defines simple task for training a walking policy for Z-Bot."""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +14,7 @@ import xax
 from flax.core import FrozenDict
 from jaxtyping import Array, PRNGKeyArray
 
-from .standing import AuxOutputs, KbotStandingTask, KbotStandingTaskConfig
+from .standing import AuxOutputs, ZbotStandingTask, ZbotStandingTaskConfig
 
 OBS_SIZE = 18 * 2 + 3 + 3  # = 42 position + velocity + imu_acc + imu_gyro
 CMD_SIZE = 2
@@ -74,7 +74,7 @@ class MultiLayerLSTM(eqx.Module):
         return h, c, jnp.stack([stacked_h, stacked_c], axis=1)  # h_last, c_last, (depth, 2, hidden_size)
 
 
-class KbotActor(eqx.Module):
+class ZbotActor(eqx.Module):
     """Actor for the walking task."""
 
     multi_layer_lstm: MultiLayerLSTM
@@ -173,7 +173,7 @@ class KbotActor(eqx.Module):
         return distrax.Normal(mean_n, std_n), new_hidden_states
 
 
-class KbotCritic(eqx.Module):
+class ZbotCritic(eqx.Module):
     """Critic for the standing task."""
 
     mlp: eqx.nn.MLP
@@ -209,12 +209,12 @@ class KbotCritic(eqx.Module):
         return self.mlp(x_n)
 
 
-class KbotModel(eqx.Module):
-    actor: KbotActor
-    critic: KbotCritic
+class ZbotModel(eqx.Module):
+    actor: ZbotActor
+    critic: ZbotCritic
 
     def __init__(self, key: PRNGKeyArray) -> None:
-        self.actor = KbotActor(
+        self.actor = ZbotActor(
             key,
             min_std=0.01,
             max_std=1.0,
@@ -222,18 +222,18 @@ class KbotModel(eqx.Module):
             mean_scale=1.0,
             hidden_size=HIDDEN_SIZE,
         )
-        self.critic = KbotCritic(key)
+        self.critic = ZbotCritic(key)
 
 
 @dataclass
-class KbotStandingLSTMTaskConfig(KbotStandingTaskConfig):
+class ZbotStandingLSTMTaskConfig(ZbotStandingTaskConfig):
     pass
 
 
-Config = TypeVar("Config", bound=KbotStandingLSTMTaskConfig)
+Config = TypeVar("Config", bound=ZbotStandingLSTMTaskConfig)
 
 
-class KbotStandingLSTMTask(KbotStandingTask[Config], Generic[Config]):
+class ZbotStandingLSTMTask(ZbotStandingTask[Config], Generic[Config]):
     def get_observations(self, physics_model: ksim.PhysicsModel) -> list[ksim.Observation]:
         return [
             ksim.JointPositionObservation(noise=0.02),
@@ -249,8 +249,8 @@ class KbotStandingLSTMTask(KbotStandingTask[Config], Generic[Config]):
             ksim.PitchTooGreatTermination(max_pitch=2.04),
         ]
 
-    def get_model(self, key: PRNGKeyArray) -> KbotModel:
-        return KbotModel(key)
+    def get_model(self, key: PRNGKeyArray) -> ZbotModel:
+        return ZbotModel(key)
 
     def get_initial_carry(self, rng: PRNGKeyArray) -> Array:
         # Initialize the hidden state for LSTM
@@ -258,7 +258,7 @@ class KbotStandingLSTMTask(KbotStandingTask[Config], Generic[Config]):
 
     def _run_actor(
         self,
-        model: KbotModel,
+        model: ZbotModel,
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
         carry: Array,
@@ -272,7 +272,7 @@ class KbotStandingLSTMTask(KbotStandingTask[Config], Generic[Config]):
 
     def _run_critic(
         self,
-        model: KbotModel,
+        model: ZbotModel,
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
     ) -> Array:
@@ -285,7 +285,7 @@ class KbotStandingLSTMTask(KbotStandingTask[Config], Generic[Config]):
 
     def get_log_probs(
         self,
-        model: KbotModel,
+        model: ZbotModel,
         trajectories: ksim.Trajectory,
         rng: PRNGKeyArray,
     ) -> tuple[Array, Array]:
@@ -305,7 +305,7 @@ class KbotStandingLSTMTask(KbotStandingTask[Config], Generic[Config]):
 
     def sample_action(
         self,
-        model: KbotModel,
+        model: ZbotModel,
         carry: Array,
         physics_model: ksim.PhysicsModel,
         observations: FrozenDict[str, Array],
@@ -321,7 +321,7 @@ class KbotStandingLSTMTask(KbotStandingTask[Config], Generic[Config]):
 
         return action_n, next_carry, AuxOutputs(log_probs=action_log_prob_n, values=value_n)
 
-    def make_export_model(self, model: KbotModel, stochastic: bool = False, batched: bool = False) -> Callable:
+    def make_export_model(self, model: ZbotModel, stochastic: bool = False, batched: bool = False) -> Callable:
         """Makes a callable inference function that directly takes a flattened input vector and returns an action.
 
         Returns:
@@ -354,7 +354,7 @@ class KbotStandingLSTMTask(KbotStandingTask[Config], Generic[Config]):
         if not self.config.export_for_inference:
             return state
 
-        model: KbotModel = self.load_checkpoint(ckpt_path, part="model")
+        model: ZbotModel = self.load_checkpoint(ckpt_path, part="model")
 
         model_fn = self.make_export_model(model, stochastic=False, batched=True)
 
@@ -370,11 +370,11 @@ class KbotStandingLSTMTask(KbotStandingTask[Config], Generic[Config]):
 
 
 if __name__ == "__main__":
-    # python -m ksim_kbot.kbot2.standing_lstm run_environment=True
+    # python -m ksim_zbot.zbot2.standing_lstm run_environment=True
     # To resume training:
-    # python -m ksim_kbot.kbot2.standing_lstm load_from_ckpt_path=*.run_*.ckpt.*.bin
-    KbotStandingLSTMTask.launch(
-        KbotStandingLSTMTaskConfig(
+    # python -m ksim_zbot.zbot2.standing_lstm load_from_ckpt_path=*.run_*.ckpt.*.bin
+    ZbotStandingLSTMTask.launch(
+        ZbotStandingLSTMTaskConfig(
             num_envs=2048,
             batch_size=64,
             num_passes=10,

@@ -1,4 +1,4 @@
-"""Defines simple task for training a walking policy for K-Bot."""
+"""Defines simple task for training a walking policy for Z-Bot."""
 
 import asyncio
 from dataclasses import dataclass
@@ -37,7 +37,7 @@ MAX_TORQUE = {
     "04": 60.0,
 }
 
-Config = TypeVar("Config", bound="KbotStandingTaskConfig")
+Config = TypeVar("Config", bound="ZbotStandingTaskConfig")
 
 
 @jax.tree_util.register_dataclass
@@ -183,7 +183,7 @@ class DHHealthyReward(ksim.Reward):
         return is_healthy
 
 
-class KbotActor(eqx.Module):
+class ZbotActor(eqx.Module):
     """Actor for the walking task."""
 
     mlp: eqx.nn.MLP
@@ -256,7 +256,7 @@ class KbotActor(eqx.Module):
         return distrax.Normal(mean_n, std_n)
 
 
-class KbotCritic(eqx.Module):
+class ZbotCritic(eqx.Module):
     """Critic for the standing task."""
 
     mlp: eqx.nn.MLP
@@ -296,24 +296,24 @@ class KbotCritic(eqx.Module):
         return self.mlp(x_n)
 
 
-class KbotModel(eqx.Module):
-    actor: KbotActor
-    critic: KbotCritic
+class ZbotModel(eqx.Module):
+    actor: ZbotActor
+    critic: ZbotCritic
 
     def __init__(self, key: PRNGKeyArray) -> None:
-        self.actor = KbotActor(
+        self.actor = ZbotActor(
             key,
             min_std=0.01,
             max_std=1.0,
             var_scale=1.0,
             mean_scale=1.0,
         )
-        self.critic = KbotCritic(key)
+        self.critic = ZbotCritic(key)
 
 
 @dataclass
-class KbotStandingTaskConfig(ksim.PPOConfig):
-    """Config for the KBot walking task."""
+class ZbotStandingTaskConfig(ksim.PPOConfig):
+    """Config for the Z-Bot walking task."""
 
     robot_urdf_path: str = xax.field(
         value="ksim_zbot/kscale-assets/zbot-feet/",
@@ -358,7 +358,7 @@ class KbotStandingTaskConfig(ksim.PPOConfig):
     )
 
 
-class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
+class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
     def get_optimizer(self) -> optax.GradientTransformation:
         """Builds the optimizer.
 
@@ -602,15 +602,15 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
             ksim.PitchTooGreatTermination(max_pitch=2.04),
         ]
 
-    def get_model(self, key: PRNGKeyArray) -> KbotModel:
-        return KbotModel(key)
+    def get_model(self, key: PRNGKeyArray) -> ZbotModel:
+        return ZbotModel(key)
 
     def get_initial_carry(self, rng: PRNGKeyArray) -> Array:
         return jnp.zeros(HISTORY_LENGTH * SINGLE_STEP_HISTORY_SIZE)
 
     def _run_actor(
         self,
-        model: KbotModel,
+        model: ZbotModel,
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
     ) -> distrax.Normal:
@@ -625,7 +625,7 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
 
     def _run_critic(
         self,
-        model: KbotModel,
+        model: ZbotModel,
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
     ) -> Array:
@@ -640,7 +640,7 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
 
     def get_on_policy_log_probs(
         self,
-        model: KbotModel,
+        model: ZbotModel,
         trajectories: ksim.Trajectory,
         rng: PRNGKeyArray,
     ) -> Array:
@@ -650,7 +650,7 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
 
     def get_on_policy_values(
         self,
-        model: KbotModel,
+        model: ZbotModel,
         trajectories: ksim.Trajectory,
         rng: PRNGKeyArray,
     ) -> Array:
@@ -660,7 +660,7 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
 
     def get_log_probs(
         self,
-        model: KbotModel,
+        model: ZbotModel,
         trajectories: ksim.Trajectory,
         rng: PRNGKeyArray,
     ) -> tuple[Array, Array]:
@@ -678,7 +678,7 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
 
     def get_values(
         self,
-        model: KbotModel,
+        model: ZbotModel,
         trajectories: ksim.Trajectory,
         rng: PRNGKeyArray,
     ) -> Array:
@@ -691,7 +691,7 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
 
     def sample_action(
         self,
-        model: KbotModel,
+        model: ZbotModel,
         carry: Array,
         physics_model: ksim.PhysicsModel,
         observations: FrozenDict[str, Array],
@@ -735,7 +735,7 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
 
         return action_n, history_n, AuxOutputs(log_probs=action_log_prob_n, values=value_n)
 
-    def make_export_model(self, model: KbotModel, stochastic: bool = False, batched: bool = False) -> Callable:
+    def make_export_model(self, model: ZbotModel, stochastic: bool = False, batched: bool = False) -> Callable:
         """Makes a callable inference function that directly takes a flattened input vector and returns an action.
 
         Returns:
@@ -766,7 +766,7 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
     def on_after_checkpoint_save(self, ckpt_path: Path, state: xax.State) -> xax.State:
         state = super().on_after_checkpoint_save(ckpt_path, state)
 
-        model: KbotModel = self.load_checkpoint(ckpt_path, part="model")
+        model: ZbotModel = self.load_checkpoint(ckpt_path, part="model")
 
         model_fn = self.make_export_model(model, stochastic=False, batched=True)
 
@@ -783,14 +783,12 @@ class KbotStandingTask(ksim.PPOTask[KbotStandingTaskConfig], Generic[Config]):
 
 if __name__ == "__main__":
     # To run training, use the following command:
-    # python -m ksim_kbot.kbot2.standing
+    #   python -m ksim_zbot.zbot2.standing
     # To visualize the environment, use the following command:
-    # python -m ksim_kbot.kbot2.standing \
-    #  run_environment=True \
-    #  run_environment_num_seconds=1 \
-    #  run_environment_save_path=videos/test.mp4
-    KbotStandingTask.launch(
-        KbotStandingTaskConfig(
+    #   python -m ksim_zbot.zbot2.standing \
+    #       run_environment=True eval_mode=True valid_every_n_steps=1000
+    ZbotStandingTask.launch(
+        ZbotStandingTaskConfig(
             num_envs=4096,
             batch_size=256,
             num_passes=10,

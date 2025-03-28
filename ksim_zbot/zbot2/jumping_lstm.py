@@ -1,5 +1,5 @@
 # mypy: disable-error-code="override"
-"""Defines simple task for training a walking policy for K-Bot."""
+"""Defines simple task for training a walking policy for Z-Bot."""
 
 from dataclasses import dataclass
 
@@ -12,7 +12,7 @@ from jaxtyping import Array
 from kscale.web.gen.api import JointMetadataOutput
 
 from .standing import LastActionObservation, HistoryObservation
-from .standing_lstm import KbotStandingLSTMTask, KbotStandingLSTMTaskConfig
+from .standing_lstm import ZbotStandingLSTMTask, ZbotStandingLSTMTaskConfig
 
 
 @attrs.define(frozen=True, kw_only=True)
@@ -45,11 +45,11 @@ class AuxOutputs:
 
 
 @dataclass
-class KbotJumpingLSTMTaskConfig(KbotStandingLSTMTaskConfig):
+class ZbotJumpingLSTMTaskConfig(ZbotStandingLSTMTaskConfig):
     pass
 
 
-class KbotJumpingLSTMTask(KbotStandingLSTMTask[KbotJumpingLSTMTaskConfig]):
+class ZbotJumpingLSTMTask(ZbotStandingLSTMTask[ZbotJumpingLSTMTaskConfig]):
     def get_rewards(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reward]:
         return [
             UpwardReward(scale=0.5),
@@ -106,8 +106,8 @@ if __name__ == "__main__":
     #   python -m ksim_zbot.zbot2.jumping_lstm
     # To visualize the environment, use the following command:
     #   python -m ksim_zbot.zbot2.jumping_lstm run_environment=True
-    KbotJumpingLSTMTask.launch(
-        KbotJumpingLSTMTaskConfig(
+    ZbotJumpingLSTMTask.launch(
+        ZbotJumpingLSTMTaskConfig(
             num_envs=2048,
             batch_size=64,
             num_passes=8,

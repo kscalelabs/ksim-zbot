@@ -1,5 +1,5 @@
 # mypy: disable-error-code="override"
-"""Defines simple task for training a walking policy for K-Bot."""
+"""Defines simple task for training a walking policy for Z-Bot."""
 
 from dataclasses import dataclass
 
@@ -11,7 +11,7 @@ import xax
 from jaxtyping import Array, PRNGKeyArray
 from kscale.web.gen.api import JointMetadataOutput
 
-from .standing import KbotStandingTask, KbotStandingTaskConfig, LastActionObservation, HistoryObservation
+from .standing import ZbotStandingTask, ZbotStandingTaskConfig, LastActionObservation, HistoryObservation
 
 
 @attrs.define(frozen=True, kw_only=True)
@@ -44,11 +44,11 @@ class AuxOutputs:
 
 
 @dataclass
-class KbotJumpingTaskConfig(KbotStandingTaskConfig):
+class ZbotJumpingTaskConfig(ZbotStandingTaskConfig):
     pass
 
 
-class KbotJumpingTask(KbotStandingTask[KbotJumpingTaskConfig]):
+class ZbotJumpingTask(ZbotStandingTask[ZbotJumpingTaskConfig]):
     def get_rewards(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reward]:
         return [
             UpwardReward(scale=0.5),
@@ -109,8 +109,8 @@ if __name__ == "__main__":
     #   python -m ksim_zbot.zbot2.jumping
     # To visualize the environment, use the following command:
     #   python -m ksim_zbot.zbot2.jumping run_environment=True
-    KbotJumpingTask.launch(
-        KbotJumpingTaskConfig(
+    ZbotJumpingTask.launch(
+        ZbotJumpingTaskConfig(
             num_envs=2048,
             batch_size=64,
             num_passes=8,
