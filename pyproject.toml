@@ -32,6 +32,7 @@ namespace_packages = false
 
 # Uncomment to exclude modules from Mypy.
 [[tool.mypy.overrides]]
+
 module = [
     "brax.*",
     "distrax.*",
@@ -40,6 +41,7 @@ module = [
     "optax.*",
     "scipy.*",
     "_pytest.*",
+    "orbax.*",
 ]
 ignore_missing_imports = true
 
