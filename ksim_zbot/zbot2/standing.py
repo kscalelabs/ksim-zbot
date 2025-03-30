@@ -488,7 +488,6 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
                 # Get base name for actuator (remove the _50 suffix)
                 base_name = joint_name.rsplit("_", 1)[0]
                 actuator_name = f"{base_name}_50_ctrl"
-                breakpoint()
                 
                 actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
                 if actuator_id >= 0:
