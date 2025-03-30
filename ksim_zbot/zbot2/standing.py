@@ -14,6 +14,7 @@ import ksim
 import mujoco
 import optax
 import xax
+from scipy.interpolate import CubicSpline
 from flax.core import FrozenDict
 from jaxtyping import Array, PRNGKeyArray
 from kscale.web.gen.api import JointMetadataOutput
@@ -289,7 +290,8 @@ class FeetechActuators(Actuators):
         vin: float,
         kt: float,
         R: float,
-        error_gain: float,
+        error_gain: float = None,      # fallback constant if no spline is provided
+        error_gain_data: list = None,  # list of dicts with keys "pos_err" and "error_gain"
         action_noise: float = 0.0,
         action_noise_type: NoiseType = "none",
         torque_noise: float = 0.0,
@@ -301,7 +303,19 @@ class FeetechActuators(Actuators):
         self.R = R
         self.kp = 32
         self.kd = 32
-        self.error_gain = error_gain
+        if error_gain_data is not None:
+            # Extract x (position error) and y (error gain) values.
+            x_vals = [d["pos_err"] for d in error_gain_data]
+            y_vals = [d["error_gain"] for d in error_gain_data]
+            cs = CubicSpline(x_vals, y_vals, extrapolate=True)
+            # Store spline knots and coefficients as JAX arrays.
+            self.spline_knots = jnp.array(cs.x)
+            self.spline_coeffs = jnp.array(cs.c)
+            self.error_gain = None  # not used when spline is active
+        else:
+            self.spline_knots = None
+            self.spline_coeffs = None
+            self.error_gain = error_gain
         self.action_noise = action_noise
         self.action_noise_type = action_noise_type
         self.torque_noise = torque_noise
@@ -309,7 +323,7 @@ class FeetechActuators(Actuators):
 
     def get_ctrl(self, action: Array, physics_data: PhysicsData, rng: PRNGKeyArray) -> Array:
         """
-        Compute torque control using Feetech parameters.
+        Compute torque control using Feetech parameters and a cubic spline for error gain.
         Assumes `action` is the target position.
         """
         pos_rng, tor_rng = jax.random.split(rng)
@@ -317,13 +331,30 @@ class FeetechActuators(Actuators):
         current_pos = physics_data.qpos[7:]
         current_vel = physics_data.qvel[6:]
 
-        # Compute position error (target position minus current position)
+        # Compute position error (target minus current) and velocity error (assume target velocity is zero)
         pos_error = action - current_pos
-        # Assume target velocity is zero; compute velocity error
         vel_error = -current_vel
 
+        if self.spline_knots is not None:
+            # Define a function to evaluate the cubic spline with saturation.
+            def _eval_spline(x_val):
+                lower = self.spline_knots[0]
+                upper = self.spline_knots[-1]
+                # Clip x_val within the spline range.
+                x_val_clipped = jnp.clip(x_val, lower, upper)
+                idx = jnp.clip(jnp.searchsorted(self.spline_knots, x_val_clipped) - 1, 0, self.spline_knots.shape[0] - 2)
+                dx = x_val_clipped - self.spline_knots[idx]
+                return (self.spline_coeffs[0, idx] * dx**3 +
+                        self.spline_coeffs[1, idx] * dx**2 +
+                        self.spline_coeffs[2, idx] * dx +
+                        self.spline_coeffs[3, idx])
+            # Evaluate the spline on the absolute value of the position error.
+            error_gain = jax.vmap(_eval_spline)(jnp.abs(pos_error))
+        else:
+            error_gain = self.error_gain
+
         # Compute the combined control (PD control law)
-        duty = self.kp * self.error_gain * pos_error + self.kd * vel_error
+        duty = self.kp * error_gain * pos_error + self.kd * vel_error
 
         # Multiply by max torque, add torque noise, and clip to limits
         torque = jnp.clip(
@@ -729,7 +760,8 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
             vin=FT_STS3250_PARAMS["vin"],
             kt=FT_STS3250_PARAMS["kt"],
             R=FT_STS3250_PARAMS["R"],
-            error_gain=FT_STS3250_PARAMS["error_gain"],
+            #error_gain=FT_STS3250_PARAMS["error_gain"],
+            error_gain_data=FT_STS3215_PARAMS["error_gain_data"],
             action_noise=0.0,
             action_noise_type="none",
             torque_noise=0.0,
