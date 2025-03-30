@@ -20,6 +20,8 @@ from kscale.web.gen.api import JointMetadataOutput
 from mujoco import mjx
 from mujoco_scenes.mjcf import load_mjmodel
 from xax.nn.export import export
+from ksim.types import PhysicsData
+from ksim.actuators import Actuators, NoiseType
 
 OBS_SIZE = 20 * 2 + 3 + 3 + 20  # position + velocity + imu_acc + imu_gyro + last_action
 CMD_SIZE = 2
@@ -31,19 +33,23 @@ HISTORY_LENGTH = 0
 
 NUM_INPUTS = (OBS_SIZE + CMD_SIZE) + SINGLE_STEP_HISTORY_SIZE * HISTORY_LENGTH
 
-# Feetech parameters from Scott's modelling 
+# Feetech parameters from Scott's modelling
 FT_STS3215_PARAMS = {
     "max_torque": 5.510764878546495,  # forcerange for sts3215_12v
     "kp": 29.07744066635301,
-    "kd": 1.1793454779199242,          # use the damping value as kd
+    "kd": 1.1793454779199242,  # use the damping value as kd
     "error_gain": 0.164787755,
+    "armature": 0.025896903176634425,
+    "frictionloss": 0.11434146818509992
 }
 
 FT_STS3250_PARAMS = {
-    "max_torque": 8.78317969605094,    # forcerange for sts3250
+    "max_torque": 8.78317969605094,  # forcerange for sts3250
     "kp": 45.88324107347177,
-    "kd": 1.470804479204935,           # use the damping value as kd
+    "kd": 1.470804479204935,  # use the damping value as kd
     "error_gain": 0.163249681,
+    "armature": 0.03999977737144798,
+    "frictionloss": 0.19999504581400715
 }
 
 Config = TypeVar("Config", bound="ZbotStandingTaskConfig")
@@ -62,6 +68,60 @@ class HistoryObservation(ksim.Observation):
         if not isinstance(state.carry, Array):
             raise ValueError("Carry is not a history array")
         return state.carry
+    
+
+class FeetechActuators(Actuators):
+    """Feetech actuator controller for feetech motors (3215 and 3250) with derivative (kd) term."""
+
+    def __init__(
+        self,
+        max_torque: float,
+        kp: float,
+        kd: float,
+        error_gain: float,
+        action_noise: float = 0.0,
+        action_noise_type: NoiseType = "none",
+        torque_noise: float = 0.0,
+        torque_noise_type: NoiseType = "none",
+    ) -> None:
+        self.max_torque = max_torque
+        self.kp = kp
+        self.kd = kd
+        self.error_gain = error_gain
+        self.action_noise = action_noise
+        self.action_noise_type = action_noise_type
+        self.torque_noise = torque_noise
+        self.torque_noise_type = torque_noise_type
+
+    def get_ctrl(self, action: Array, physics_data: PhysicsData, rng: PRNGKeyArray) -> Array:
+        """
+        Compute torque control using Feetech parameters.
+        Assumes `action` is the target position.
+        """
+        pos_rng, tor_rng = jax.random.split(rng)
+        # Extract current joint positions and velocities (ignoring root if necessary)
+        current_pos = physics_data.qpos[7:]
+        current_vel = physics_data.qvel[6:]
+
+        # Compute position error (target position minus current position)
+        pos_error = action - current_pos
+        # Assume target velocity is zero; compute velocity error
+        vel_error = - current_vel
+
+        # Compute the combined control (PD control law)
+        duty = self.kp * self.error_gain * pos_error + self.kd * vel_error
+
+        # Multiply by max torque, add torque noise, and clip to limits
+        torque = jnp.clip(
+            self.add_noise(self.torque_noise, self.torque_noise_type, duty * self.max_torque, tor_rng),
+            -self.max_torque,
+            self.max_torque,
+        )
+        return torque
+
+    def get_default_action(self, physics_data: PhysicsData) -> Array:
+        # Default action: current joint positions.
+        return physics_data.qpos[7:]
 
 
 @attrs.define(frozen=True, kw_only=True)
@@ -395,6 +455,64 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
         mj_model.opt.disableflags = mjx.DisableBit.EULERDAMP
         mj_model.opt.solver = mjx.SolverType.CG
 
+        # Apply servo-specific parameters to joints
+        # Joint names for arms (STS3215)
+        arm_joint_names = [
+            "right_shoulder_yaw", "right_shoulder_pitch", "right_elbow_yaw", "right_gripper",
+            "left_shoulder_yaw", "left_shoulder_pitch", "left_elbow_yaw", "left_gripper"
+        ]
+        
+        # Joint names for legs (STS3250)
+        leg_joint_names = [
+            "left_hip_yaw", "left_hip_roll", "left_hip_pitch", "left_knee_pitch", 
+            "left_ankle_pitch", "left_ankle_roll", "right_hip_yaw", "right_hip_roll", 
+            "right_hip_pitch", "right_knee_pitch", "right_ankle_pitch", "right_ankle_roll"
+        ]
+        
+        # Apply parameters to arm joints (STS3215)
+        for joint_name in arm_joint_names:
+            try:
+                joint_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+                dof_id = mj_model.jnt_dofadr[joint_id]
+                
+                # Apply STS3215 parameters
+                mj_model.dof_damping[dof_id] = FT_STS3215_PARAMS["kd"]
+                mj_model.dof_armature[dof_id] = FT_STS3215_PARAMS["armature"]
+                mj_model.dof_frictionloss[dof_id] = FT_STS3215_PARAMS["frictionloss"]
+                
+                # Find associated actuator and set its control range
+                actuator_name = f"{joint_name}_ctrl"
+                actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
+                if actuator_id >= 0:
+                    mj_model.actuator_ctrlrange[actuator_id, :] = [
+                        -FT_STS3215_PARAMS["max_torque"], 
+                        FT_STS3215_PARAMS["max_torque"]
+                    ]
+            except Exception as e:
+                print(f"Warning: Could not apply parameters to joint {joint_name}: {e}")
+        
+        # Apply parameters to leg joints (STS3250)
+        for joint_name in leg_joint_names:
+            try:
+                joint_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+                dof_id = mj_model.jnt_dofadr[joint_id]
+                
+                # Apply STS3250 parameters
+                mj_model.dof_damping[dof_id] = FT_STS3250_PARAMS["kd"]
+                mj_model.dof_armature[dof_id] = FT_STS3250_PARAMS["armature"]
+                mj_model.dof_frictionloss[dof_id] = FT_STS3250_PARAMS["frictionloss"]
+                
+                # Find associated actuator and set its control range
+                actuator_name = f"{joint_name}_ctrl"
+                actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
+                if actuator_id >= 0:
+                    mj_model.actuator_ctrlrange[actuator_id, :] = [
+                        -FT_STS3250_PARAMS["max_torque"], 
+                        FT_STS3250_PARAMS["max_torque"]
+                    ]
+            except Exception as e:
+                print(f"Warning: Could not apply parameters to joint {joint_name}: {e}")
+
         return mj_model
 
     def get_mujoco_model_metadata(self, mj_model: mujoco.MjModel) -> dict[str, JointMetadataOutput]:
@@ -408,7 +526,7 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
         physics_model: ksim.PhysicsModel,
         metadata: dict[str, JointMetadataOutput] | None = None,
     ) -> ksim.Actuators:
-        return ksim.FeetechActuators(
+        return FeetechActuators(
             max_torque=FT_STS3250_PARAMS["max_torque"],
             kp=FT_STS3250_PARAMS["kp"],
             kd=FT_STS3250_PARAMS["kd"],
