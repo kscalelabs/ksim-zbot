@@ -44,107 +44,6 @@ FT_STS3215_PARAMS = {
     "vin": 12.1,
     "kt": 1.0000000244338463,
     "R": 2.2136477795617733,
-    "error_gain_data": [
-        {"pos_err": 0.003067962, "error_gain": 0.257703684},
-        {"pos_err": 0.004601942, "error_gain": 0.226127343},
-        {"pos_err": 0.006135923, "error_gain": 0.210339173},
-        {"pos_err": 0.007669904, "error_gain": 0.200866271},
-        {"pos_err": 0.009203885, "error_gain": 0.194551002},
-        {"pos_err": 0.010737866, "error_gain": 0.190040097},
-        {"pos_err": 0.012271846, "error_gain": 0.186656917},
-        {"pos_err": 0.013805827, "error_gain": 0.184025556},
-        {"pos_err": 0.015339808, "error_gain": 0.181920466},
-        {"pos_err": 0.016873789, "error_gain": 0.18019812},
-        {"pos_err": 0.018407769, "error_gain": 0.178762832},
-        {"pos_err": 0.01994175, "error_gain": 0.177548357},
-        {"pos_err": 0.021475731, "error_gain": 0.176507379},
-        {"pos_err": 0.023009712, "error_gain": 0.175605198},
-        {"pos_err": 0.024543693, "error_gain": 0.174815789},
-        {"pos_err": 0.026077673, "error_gain": 0.174119253},
-        {"pos_err": 0.027611654, "error_gain": 0.173500109},
-        {"pos_err": 0.029145635, "error_gain": 0.172838918},
-        {"pos_err": 0.030679616, "error_gain": 0.172447564},
-        {"pos_err": 0.032213597, "error_gain": 0.171996473},
-        {"pos_err": 0.033747577, "error_gain": 0.171586391},
-        {"pos_err": 0.035281558, "error_gain": 0.171211968},
-        {"pos_err": 0.036815539, "error_gain": 0.170783864},
-        {"pos_err": 0.03834952, "error_gain": 0.17051224},
-        {"pos_err": 0.0398835, "error_gain": 0.170222333},
-        {"pos_err": 0.041417481, "error_gain": 0.169953901},
-        {"pos_err": 0.042951462, "error_gain": 0.169704642},
-        {"pos_err": 0.044485443, "error_gain": 0.169472574},
-        {"pos_err": 0.046019424, "error_gain": 0.169255977},
-        {"pos_err": 0.047553404, "error_gain": 0.169053354},
-        {"pos_err": 0.049087385, "error_gain": 0.168863395},
-        {"pos_err": 0.050621366, "error_gain": 0.168684948},
-        {"pos_err": 0.052155347, "error_gain": 0.168516999},
-        {"pos_err": 0.053689328, "error_gain": 0.168358646},
-        {"pos_err": 0.055223308, "error_gain": 0.168209091},
-        {"pos_err": 0.056757289, "error_gain": 0.16806762},
-        {"pos_err": 0.05829127, "error_gain": 0.167922873},
-        {"pos_err": 0.059825251, "error_gain": 0.167795995},
-        {"pos_err": 0.061359232, "error_gain": 0.167675462},
-        {"pos_err": 0.062893212, "error_gain": 0.167560808},
-        {"pos_err": 0.064427193, "error_gain": 0.167451614},
-        {"pos_err": 0.065961174, "error_gain": 0.167347499},
-        {"pos_err": 0.067495155, "error_gain": 0.167248117},
-        {"pos_err": 0.069029135, "error_gain": 0.167153151},
-        {"pos_err": 0.070563116, "error_gain": 0.167049028},
-        {"pos_err": 0.072097097, "error_gain": 0.16696234},
-        {"pos_err": 0.073631078, "error_gain": 0.166879263},
-        {"pos_err": 0.075165059, "error_gain": 0.166799577},
-        {"pos_err": 0.076699039, "error_gain": 0.166723079},
-        {"pos_err": 0.07823302, "error_gain": 0.166649581},
-        {"pos_err": 0.079767001, "error_gain": 0.166578909},
-        {"pos_err": 0.081300982, "error_gain": 0.166510904},
-        {"pos_err": 0.082834963, "error_gain": 0.166445418},
-        {"pos_err": 0.084368943, "error_gain": 0.166382314},
-        {"pos_err": 0.085902924, "error_gain": 0.166303274},
-        {"pos_err": 0.087436905, "error_gain": 0.166244877},
-        {"pos_err": 0.088970886, "error_gain": 0.166199031},
-        {"pos_err": 0.090504866, "error_gain": 0.166130569},
-        {"pos_err": 0.092038847, "error_gain": 0.166081366},
-        {"pos_err": 0.093572828, "error_gain": 0.166030437},
-        {"pos_err": 0.095106809, "error_gain": 0.16598115},
-        {"pos_err": 0.09664079, "error_gain": 0.165933428},
-        {"pos_err": 0.09817477, "error_gain": 0.165887197},
-        {"pos_err": 0.099708751, "error_gain": 0.165842389},
-        {"pos_err": 0.101242732, "error_gain": 0.165798939},
-        {"pos_err": 0.102776713, "error_gain": 0.165750704},
-        {"pos_err": 0.104310694, "error_gain": 0.16570988},
-        {"pos_err": 0.105844674, "error_gain": 0.165667287},
-        {"pos_err": 0.107378655, "error_gain": 0.165628821},
-        {"pos_err": 0.108912636, "error_gain": 0.165585699},
-        {"pos_err": 0.110446617, "error_gain": 0.165549435},
-        {"pos_err": 0.111980598, "error_gain": 0.165514164},
-        {"pos_err": 0.113514578, "error_gain": 0.165479847},
-        {"pos_err": 0.115048559, "error_gain": 0.165446444},
-        {"pos_err": 0.11658254, "error_gain": 0.165413921},
-        {"pos_err": 0.118116521, "error_gain": 0.165382242},
-        {"pos_err": 0.119650501, "error_gain": 0.165351376},
-        {"pos_err": 0.121184482, "error_gain": 0.165321291},
-        {"pos_err": 0.122718463, "error_gain": 0.165291958},
-        {"pos_err": 0.124252444, "error_gain": 0.165263349},
-        {"pos_err": 0.125786425, "error_gain": 0.165235438},
-        {"pos_err": 0.127320405, "error_gain": 0.1652082},
-        {"pos_err": 0.128854386, "error_gain": 0.16518161},
-        {"pos_err": 0.130388367, "error_gain": 0.165155646},
-        {"pos_err": 0.131922348, "error_gain": 0.165130286},
-        {"pos_err": 0.133456329, "error_gain": 0.165082093},
-        {"pos_err": 0.134990309, "error_gain": 0.165058145},
-        {"pos_err": 0.13652429, "error_gain": 0.165034735},
-        {"pos_err": 0.138058271, "error_gain": 0.165011845},
-        {"pos_err": 0.139592252, "error_gain": 0.164989458},
-        {"pos_err": 0.141126232, "error_gain": 0.164967558},
-        {"pos_err": 0.142660213, "error_gain": 0.164946129},
-        {"pos_err": 0.144194194, "error_gain": 0.164925156},
-        {"pos_err": 0.145728175, "error_gain": 0.164904625},
-        {"pos_err": 0.147262156, "error_gain": 0.164873911},
-        {"pos_err": 0.148796136, "error_gain": 0.164854331},
-        {"pos_err": 0.150330117, "error_gain": 0.164835151},
-        {"pos_err": 0.151864098, "error_gain": 0.164816358},
-        {"pos_err": 0.153398079, "error_gain": 0.164787755},
-    ],
     "error_gain": 0.164787755,
 }
 
@@ -158,108 +57,6 @@ FT_STS3250_PARAMS = {
     "vin": 12.1,
     "kt": 1.0005874626213263,
     "R": 1.3890462492623645,
-    "error_gain_data": [
-        {"pos_err": 0.001533981, "error_gain": 0.198625369},
-        {"pos_err": 0.003067962, "error_gain": 0.180800015},
-        {"pos_err": 0.004601942, "error_gain": 0.175129855},
-        {"pos_err": 0.006135923, "error_gain": 0.172091057},
-        {"pos_err": 0.007669904, "error_gain": 0.170267778},
-        {"pos_err": 0.009203885, "error_gain": 0.168984352},
-        {"pos_err": 0.010737866, "error_gain": 0.168125825},
-        {"pos_err": 0.012271846, "error_gain": 0.167507395},
-        {"pos_err": 0.013805827, "error_gain": 0.167003758},
-        {"pos_err": 0.015339808, "error_gain": 0.166539732},
-        {"pos_err": 0.016873789, "error_gain": 0.166215635},
-        {"pos_err": 0.018407769, "error_gain": 0.165962531},
-        {"pos_err": 0.01994175, "error_gain": 0.165748365},
-        {"pos_err": 0.021475731, "error_gain": 0.165550243},
-        {"pos_err": 0.023009712, "error_gain": 0.165378538},
-        {"pos_err": 0.024543693, "error_gain": 0.165202831},
-        {"pos_err": 0.026077673, "error_gain": 0.165071762},
-        {"pos_err": 0.027611654, "error_gain": 0.164955257},
-        {"pos_err": 0.029145635, "error_gain": 0.164851015},
-        {"pos_err": 0.030679616, "error_gain": 0.164757197},
-        {"pos_err": 0.032213597, "error_gain": 0.164672314},
-        {"pos_err": 0.033747577, "error_gain": 0.164595148},
-        {"pos_err": 0.035281558, "error_gain": 0.164524692},
-        {"pos_err": 0.036815539, "error_gain": 0.164460108},
-        {"pos_err": 0.03834952, "error_gain": 0.164376244},
-        {"pos_err": 0.0398835, "error_gain": 0.164330172},
-        {"pos_err": 0.041417481, "error_gain": 0.164272423},
-        {"pos_err": 0.042951462, "error_gain": 0.164226074},
-        {"pos_err": 0.044485443, "error_gain": 0.164168873},
-        {"pos_err": 0.046019424, "error_gain": 0.164142647},
-        {"pos_err": 0.047553404, "error_gain": 0.164091827},
-        {"pos_err": 0.049087385, "error_gain": 0.164056915},
-        {"pos_err": 0.050621366, "error_gain": 0.16402412},
-        {"pos_err": 0.052155347, "error_gain": 0.163993253},
-        {"pos_err": 0.053689328, "error_gain": 0.163964151},
-        {"pos_err": 0.055223308, "error_gain": 0.163936665},
-        {"pos_err": 0.056757289, "error_gain": 0.163910665},
-        {"pos_err": 0.05829127, "error_gain": 0.163859228},
-        {"pos_err": 0.059825251, "error_gain": 0.1638261},
-        {"pos_err": 0.061359232, "error_gain": 0.163840465},
-        {"pos_err": 0.062893212, "error_gain": 0.16380941},
-        {"pos_err": 0.064427193, "error_gain": 0.163784685},
-        {"pos_err": 0.065961174, "error_gain": 0.163770584},
-        {"pos_err": 0.067495155, "error_gain": 0.163715456},
-        {"pos_err": 0.069029135, "error_gain": 0.16373521},
-        {"pos_err": 0.070563116, "error_gain": 0.163705391},
-        {"pos_err": 0.072097097, "error_gain": 0.163689843},
-        {"pos_err": 0.073631078, "error_gain": 0.163674943},
-        {"pos_err": 0.075165059, "error_gain": 0.163660652},
-        {"pos_err": 0.076699039, "error_gain": 0.163646932},
-        {"pos_err": 0.07823302, "error_gain": 0.16363375},
-        {"pos_err": 0.079767001, "error_gain": 0.163621076},
-        {"pos_err": 0.081300982, "error_gain": 0.163608879},
-        {"pos_err": 0.082834963, "error_gain": 0.163589589},
-        {"pos_err": 0.084368943, "error_gain": 0.163578409},
-        {"pos_err": 0.085902924, "error_gain": 0.16356399},
-        {"pos_err": 0.087436905, "error_gain": 0.163557225},
-        {"pos_err": 0.088970886, "error_gain": 0.163543668},
-        {"pos_err": 0.090504866, "error_gain": 0.163544382},
-        {"pos_err": 0.092038847, "error_gain": 0.163528097},
-        {"pos_err": 0.093572828, "error_gain": 0.163525703},
-        {"pos_err": 0.095106809, "error_gain": 0.163516815},
-        {"pos_err": 0.09664079, "error_gain": 0.163501742},
-        {"pos_err": 0.09817477, "error_gain": 0.163483958},
-        {"pos_err": 0.099708751, "error_gain": 0.163460452},
-        {"pos_err": 0.101242732, "error_gain": 0.163437658},
-        {"pos_err": 0.102776713, "error_gain": 0.163491559},
-        {"pos_err": 0.104310694, "error_gain": 0.163453999},
-        {"pos_err": 0.105844674, "error_gain": 0.163447052},
-        {"pos_err": 0.107378655, "error_gain": 0.163434483},
-        {"pos_err": 0.108912636, "error_gain": 0.163419399},
-        {"pos_err": 0.110446617, "error_gain": 0.163399075},
-        {"pos_err": 0.111980598, "error_gain": 0.163393261},
-        {"pos_err": 0.113514578, "error_gain": 0.163401369},
-        {"pos_err": 0.115048559, "error_gain": 0.163403828},
-        {"pos_err": 0.11658254, "error_gain": 0.163376737},
-        {"pos_err": 0.118116521, "error_gain": 0.163382098},
-        {"pos_err": 0.119650501, "error_gain": 0.163379487},
-        {"pos_err": 0.121184482, "error_gain": 0.163361469},
-        {"pos_err": 0.122718463, "error_gain": 0.163356634},
-        {"pos_err": 0.124252444, "error_gain": 0.163351918},
-        {"pos_err": 0.125786425, "error_gain": 0.163347317},
-        {"pos_err": 0.127320405, "error_gain": 0.163342827},
-        {"pos_err": 0.128854386, "error_gain": 0.163338444},
-        {"pos_err": 0.130388367, "error_gain": 0.163334165},
-        {"pos_err": 0.131922348, "error_gain": 0.163329984},
-        {"pos_err": 0.133456329, "error_gain": 0.163314192},
-        {"pos_err": 0.134990309, "error_gain": 0.163321909},
-        {"pos_err": 0.13652429, "error_gain": 0.163306562},
-        {"pos_err": 0.138058271, "error_gain": 0.163302875},
-        {"pos_err": 0.139592252, "error_gain": 0.163299268},
-        {"pos_err": 0.141126232, "error_gain": 0.16329574},
-        {"pos_err": 0.142660213, "error_gain": 0.163281334},
-        {"pos_err": 0.144194194, "error_gain": 0.163284574},
-        {"pos_err": 0.145728175, "error_gain": 0.163274878},
-        {"pos_err": 0.147262156, "error_gain": 0.163292972},
-        {"pos_err": 0.148796136, "error_gain": 0.163268688},
-        {"pos_err": 0.150330117, "error_gain": 0.163265688},
-        {"pos_err": 0.151864098, "error_gain": 0.163268922},
-        {"pos_err": 0.153398079, "error_gain": 0.163249681},
-    ],
     "error_gain": 0.163249681,
 }
 
@@ -290,7 +87,7 @@ class FeetechActuators(Actuators):
         kp: Array,
         kd: Array,
         error_gain: Array,
-        #error_gain_data: list = None,  # list of dicts with keys "pos_err" and "error_gain"
+        error_gain_data: list = None,  # list of dicts with keys "pos_err" and "error_gain"
         action_noise: float = 0.0,
         action_noise_type: NoiseType = "none",
         torque_noise: float = 0.0,
@@ -300,18 +97,8 @@ class FeetechActuators(Actuators):
         self.kp = kp                      # Array of shape (NUM_OUTPUTS,)
         self.kd = kd                      # Array of shape (NUM_OUTPUTS,)
         self.error_gain = error_gain      # Array of shape (NUM_OUTPUTS
-        #if error_gain_data is not None:
-            # Extract x (position error) and y (error gain) values.
-            #x_vals = [d["pos_err"] for d in error_gain_data]
-            #y_vals = [d["error_gain"] for d in error_gain_data]
-            #cs = CubicSpline(x_vals, y_vals, extrapolate=True)
-            # Store spline knots and coefficients as JAX arrays.
-        #    self.spline_knots = jnp.array(cs.x)
-        #    self.spline_coeffs = jnp.array(cs.c)
-        #    self.error_gain = None  # not used when spline is active
-        #else:
-        #    self.spline_knots = None
-        #    self.spline_coeffs = None
+        self.spline_knots = None
+        self.spline_coeffs = None
         self.error_gain = error_gain
         self.action_noise = action_noise
         self.action_noise_type = action_noise_type
@@ -331,29 +118,7 @@ class FeetechActuators(Actuators):
         pos_error = action - current_pos
         vel_error = -current_vel
 
-        #if self.spline_knots is not None:
-            # Define a function to evaluate the cubic spline with saturation.
-            #def _eval_spline(x_val):
-                #lower = self.spline_knots[0]
-                #upper = self.spline_knots[-1]
-                # Saturate x_val explicitly
-                #x_val_sat = jnp.where(x_val <= lower, lower, jnp.where(x_val >= upper, upper, x_val))
-                #jax.debug.print("Original x_val: {}, Saturated x_val: {}", x_val, x_val_sat)
-                
-                #idx = jnp.clip(jnp.searchsorted(self.spline_knots, x_val_sat) - 1, 0, self.spline_knots.shape[0] - 2)           
-                #dx = x_val_sat - self.spline_knots[idx]
-                
-                #spline_value = (self.spline_coeffs[0, idx] * dx**3 +
-                #                self.spline_coeffs[1, idx] * dx**2 +
-                #                self.spline_coeffs[2, idx] * dx +
-                #                self.spline_coeffs[3, idx])
-                #jax.debug.print("spline_value: {}", spline_value)
-                #return spline_value
-
-            # Evaluate the spline on the absolute value of the position error.
-            #error_gain = jax.vmap(_eval_spline)(jnp.abs(pos_error))
-        #else:
-            #error_gain = self.error_gain
+        error_gain = self.error_gain
 
         # Compute the combined control (PD control law)
         duty = self.kp * self.error_gain * pos_error + self.kd * vel_error
@@ -784,7 +549,7 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
             else:
                 # For joints without a specific suffix, assign default values.
                 # We should exit here if we don't have a valid joint name.
-                pass
+                raise ValueError(f"Invalid joint name: {joint_name}")
 
         return FeetechActuators(
             max_torque=max_torque_arr,
@@ -822,7 +587,7 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
                 default_targets=(
                     0.0,
                     0.0,
-                    0.40,  # Lower height from 0.91 to 0.41
+                    0.40,
                     1.0,
                     0.0,
                     0.0,
@@ -1169,7 +934,6 @@ if __name__ == "__main__":
             learning_rate=1e-4,
             clip_param=0.3,
             max_grad_norm=1.0,
-            # Removed use_mit_actuators since we're using FeetechActuators now
             export_for_inference=True,
         ),
     )
