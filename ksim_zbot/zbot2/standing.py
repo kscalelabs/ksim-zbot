@@ -779,7 +779,7 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
             ksim.StaticFrictionRandomization(scale_lower=0.5, scale_upper=2.0),
             ksim.JointZeroPositionRandomization(scale_lower=-0.05, scale_upper=0.05),
             ksim.ArmatureRandomization(scale_lower=1.0, scale_upper=1.05),
-            ksim.MassMultiplicationRandomization.from_body_name(physics_model, "Z_BOT2_MASTER_BODY_SKELETON"),
+            ksim.MassMultiplicationRandomization.from_body_name(physics_model, "Top_Brace"),
             ksim.JointDampingRandomization(scale_lower=0.95, scale_upper=1.05),
             # ksim.FloorFrictionRandomization.from_body_name(
             #     model=physics_model,
@@ -870,8 +870,8 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
             ),
             ksim.JointVelocityObservation(noise=0.5),
             ksim.ActuatorForceObservation(),
-            ksim.SensorObservation.create(physics_model, "IMU_acc", noise=0.5),
-            ksim.SensorObservation.create(physics_model, "IMU_gyro", noise=0.2),
+            ksim.SensorObservation.create(physics_model, "IMU_2_acc", noise=0.5),
+            ksim.SensorObservation.create(physics_model, "IMU_2_gyro", noise=0.2),
             LastActionObservation(noise=0.0),
             HistoryObservation(),
         ]
@@ -952,8 +952,8 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
     ) -> distrax.Normal:
         joint_pos_n = observations["joint_position_observation"]
         joint_vel_n = observations["joint_velocity_observation"]
-        imu_acc_3 = observations["IMU_acc_obs"]
-        imu_gyro_3 = observations["IMU_gyro_obs"]
+        imu_acc_3 = observations["IMU_2_acc_obs"]
+        imu_gyro_3 = observations["IMU_2_gyro_obs"]
         lin_vel_cmd_2 = commands["linear_velocity_step_command"]
         last_action_n = observations["last_action_observation"]
         history_n = observations["history_observation"]
@@ -967,8 +967,8 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
     ) -> Array:
         joint_pos_n = observations["joint_position_observation"]
         joint_vel_n = observations["joint_velocity_observation"]
-        imu_acc_3 = observations["IMU_acc_obs"]
-        imu_gyro_3 = observations["IMU_gyro_obs"]
+        imu_acc_3 = observations["IMU_2_acc_obs"]
+        imu_gyro_3 = observations["IMU_2_gyro_obs"]
         lin_vel_cmd_2 = commands["linear_velocity_step_command"]
         last_action_n = observations["last_action_observation"]
         history_n = observations["history_observation"]
@@ -1043,8 +1043,8 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
 
         joint_pos_n = observations["joint_position_observation"]
         joint_vel_n = observations["joint_velocity_observation"]
-        imu_acc_3 = observations["IMU_acc_obs"]
-        imu_gyro_3 = observations["IMU_gyro_obs"]
+        imu_acc_3 = observations["IMU_2_acc_obs"]
+        imu_gyro_3 = observations["IMU_2_gyro_obs"]
         lin_vel_cmd_2 = commands["linear_velocity_step_command"]
         last_action_n = observations["last_action_observation"]
         history_n = jnp.concatenate(
