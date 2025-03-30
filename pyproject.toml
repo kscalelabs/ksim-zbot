@@ -44,6 +44,8 @@ module = [
     "orbax.*",
     "flax.*",
     "glfw.*",
+    "tensorboard.*",
+    "cloudpickle.*",
 ]
 ignore_missing_imports = true
 

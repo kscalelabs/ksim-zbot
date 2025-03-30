@@ -14,7 +14,6 @@ import ksim
 import mujoco
 import optax
 import xax
-from flax.core import FrozenDict
 from jaxtyping import Array, PRNGKeyArray
 from kscale.web.gen.api import JointMetadataOutput
 from ksim.actuators import Actuators, NoiseType
@@ -22,6 +21,7 @@ from ksim.types import PhysicsData
 from mujoco import mjx
 from mujoco_scenes.mjcf import load_mjmodel
 from xax.nn.export import export
+from xax.utils.types.frozen_dict import FrozenDict
 
 OBS_SIZE = 20 * 2 + 3 + 3 + 20  # position + velocity + imu_acc + imu_gyro + last_action
 CMD_SIZE = 2
@@ -34,7 +34,7 @@ HISTORY_LENGTH = 0
 NUM_INPUTS = (OBS_SIZE + CMD_SIZE) + SINGLE_STEP_HISTORY_SIZE * HISTORY_LENGTH
 
 # Feetech parameters from Scott's modelling
-FT_STS3215_PARAMS = {
+FT_STS3215_PARAMS: dict[str, float | str] = {
     "sysid": "sts3215-12v-id009",  # Traceable ID @ github.com/kscalelabs/sysid
     "max_torque": 5.466091040935576,
     "armature": 0.039999999991812,
@@ -46,8 +46,7 @@ FT_STS3215_PARAMS = {
     "error_gain": 0.164787755,
 }
 
-
-FT_STS3250_PARAMS = {
+FT_STS3250_PARAMS: dict[str, float | str] = {
     "sysid": "sts3250-id008",  # Traceable ID @ github.com/kscalelabs/sysid
     "max_torque": 8.716130441407099,
     "armature": 0.03999977737144798,
@@ -86,7 +85,7 @@ class FeetechActuators(Actuators):
         kp: Array,
         kd: Array,
         error_gain: Array,
-        error_gain_data: list = None,  # list of dicts with keys "pos_err" and "error_gain"
+        error_gain_data: list | None = None,  # list of dicts with keys "pos_err" and "error_gain"
         action_noise: float = 0.0,
         action_noise_type: NoiseType = "none",
         torque_noise: float = 0.0,
@@ -430,8 +429,10 @@ class ZbotStandingTaskConfig(ksim.PPOConfig):
         help="Weight decay for the Adam optimizer.",
     )
 
-    # Mujoco parameters.
-    # Removed use_mit_actuators config option since we're now using FeetechActuators directly
+    use_mit_actuators: bool = xax.field(
+        value=False,
+        help="Whether to use the MIT actuator model, where the actions are position commands",
+    )
 
     # Rendering parameters.
     render_track_body_id: int | None = xax.field(
@@ -496,9 +497,10 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
 
                 actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
                 if actuator_id >= 0:
+                    max_torque = float(FT_STS3215_PARAMS["max_torque"])
                     mj_model.actuator_forcerange[actuator_id, :] = [
-                        -FT_STS3215_PARAMS["max_torque"],
-                        FT_STS3215_PARAMS["max_torque"],
+                        -max_torque,
+                        max_torque,
                     ]
 
             elif "_50" in joint_name:  # STS3250 servos (legs)
@@ -512,9 +514,10 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
 
                 actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
                 if actuator_id >= 0:
+                    max_torque = float(FT_STS3250_PARAMS["max_torque"])
                     mj_model.actuator_forcerange[actuator_id, :] = [
-                        -FT_STS3250_PARAMS["max_torque"],
-                        FT_STS3250_PARAMS["max_torque"],
+                        -max_torque,
+                        max_torque,
                     ]
 
         return mj_model
@@ -900,9 +903,9 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
 
         model_fn = self.make_export_model(model, stochastic=False, batched=True)
 
-        input_shapes = [(NUM_INPUTS,)]
+        input_shapes: list[tuple[int, ...]] = [(NUM_INPUTS,)]
 
-        export(  # type: ignore[operator]
+        export(
             model_fn,
             input_shapes,
             ckpt_path.parent / "tf_model",
