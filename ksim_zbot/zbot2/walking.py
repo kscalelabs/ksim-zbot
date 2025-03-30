@@ -13,11 +13,12 @@ import ksim
 import mujoco
 import optax
 import xax
-from flax.core import FrozenDict
 from jaxtyping import Array, PRNGKeyArray
 from kscale.web.gen.api import JointMetadataOutput
 from mujoco import mjx
 from mujoco_scenes.mjcf import load_mjmodel
+from xax.nn.export import export
+from xax.utils.types.frozen_dict import FrozenDict
 
 from .standing import DHControlPenalty, DHHealthyReward, HistoryObservation, LastActionObservation
 
@@ -567,8 +568,8 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig]):
         def model_fn(obs: Array, cmd: Array) -> Array:
             return model.actor.call_flat_obs(obs, cmd).mode()
 
-        input_shapes = [(OBS_SIZE,), (CMD_SIZE,)]
-        xax.export(model_fn, input_shapes, ckpt_path.parent / "tf_model")  # type: ignore[operator]
+        input_shapes: list[tuple[int, ...]] = [(OBS_SIZE,), (CMD_SIZE,)]
+        export(model_fn, input_shapes, ckpt_path.parent / "tf_model")
 
         return state
 

@@ -42,7 +42,10 @@ module = [
     "scipy.*",
     "_pytest.*",
     "orbax.*",
-    "flax.*"
+    "flax.*",
+    "glfw.*",
+    "tensorboard.*",
+    "cloudpickle.*",
 ]
 ignore_missing_imports = true
 

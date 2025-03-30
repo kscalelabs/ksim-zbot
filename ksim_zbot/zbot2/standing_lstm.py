@@ -11,8 +11,9 @@ import jax
 import jax.numpy as jnp
 import ksim
 import xax
-from flax.core import FrozenDict
 from jaxtyping import Array, PRNGKeyArray
+from xax.nn.export import export
+from xax.utils.types.frozen_dict import FrozenDict
 
 from .standing import AuxOutputs, ZbotStandingTask, ZbotStandingTaskConfig
 
@@ -358,9 +359,9 @@ class ZbotStandingLSTMTask(ZbotStandingTask[Config], Generic[Config]):
 
         model_fn = self.make_export_model(model, stochastic=False, batched=True)
 
-        input_shapes = [(NUM_INPUTS,), (DEPTH, 2, HIDDEN_SIZE)]
+        input_shapes: list[tuple[int, ...]] = [(NUM_INPUTS,), (DEPTH, 2, HIDDEN_SIZE)]
 
-        xax.export(  # type: ignore[operator]
+        export(
             model_fn,
             input_shapes,
             ckpt_path.parent / "tf_model",

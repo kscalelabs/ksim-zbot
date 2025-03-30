@@ -14,15 +14,18 @@ import ksim
 import mujoco
 import optax
 import xax
-from flax.core import FrozenDict
 from jaxtyping import Array, PRNGKeyArray
 from kscale.web.gen.api import JointMetadataOutput
+from ksim.actuators import Actuators, NoiseType
+from ksim.types import PhysicsData
 from mujoco import mjx
 from mujoco_scenes.mjcf import load_mjmodel
+from xax.nn.export import export
+from xax.utils.types.frozen_dict import FrozenDict
 
-OBS_SIZE = 20 * 2 + 3 + 3 + 40  # = 46 position + velocity + imu_acc + imu_gyro + last_action
+OBS_SIZE = 20 * 2 + 3 + 3 + 20  # position + velocity + imu_acc + imu_gyro + last_action
 CMD_SIZE = 2
-NUM_OUTPUTS = 20 * 2  # position + velocity
+NUM_OUTPUTS = 20  # position only for FeetechActuators (not position + velocity)
 
 SINGLE_STEP_HISTORY_SIZE = NUM_OUTPUTS + OBS_SIZE + CMD_SIZE
 
@@ -30,11 +33,29 @@ HISTORY_LENGTH = 0
 
 NUM_INPUTS = (OBS_SIZE + CMD_SIZE) + SINGLE_STEP_HISTORY_SIZE * HISTORY_LENGTH
 
-MAX_TORQUE = {
-    "00": 1.0,
-    "02": 14.0,
-    "03": 40.0,
-    "04": 60.0,
+# Feetech parameters from Scott's modelling
+FT_STS3215_PARAMS: dict[str, float | str] = {
+    "sysid": "sts3215-12v-id009",  # Traceable ID @ github.com/kscalelabs/sysid
+    "max_torque": 5.466091040935576,
+    "armature": 0.039999999991812,
+    "frictionloss": 0.11434146818509992,
+    "damping": 1.2305092028680242,
+    "vin": 12.1,
+    "kt": 1.0000000244338463,
+    "R": 2.2136477795617733,
+    "error_gain": 0.164787755,
+}
+
+FT_STS3250_PARAMS: dict[str, float | str] = {
+    "sysid": "sts3250-id008",  # Traceable ID @ github.com/kscalelabs/sysid
+    "max_torque": 8.716130441407099,
+    "armature": 0.03999977737144798,
+    "damping": 1.3464038511725651,
+    "frictionloss": 0.19999504581400715,
+    "vin": 12.1,
+    "kt": 1.0005874626213263,
+    "R": 1.3890462492623645,
+    "error_gain": 0.163249681,
 }
 
 Config = TypeVar("Config", bound="ZbotStandingTaskConfig")
@@ -53,6 +74,73 @@ class HistoryObservation(ksim.Observation):
         if not isinstance(state.carry, Array):
             raise ValueError("Carry is not a history array")
         return state.carry
+
+
+class FeetechActuators(Actuators):
+    """Feetech actuator controller for feetech motors (3215 and 3250) with derivative (kd) term."""
+
+    def __init__(
+        self,
+        max_torque: Array,
+        kp: Array,
+        kd: Array,
+        error_gain: Array,
+        error_gain_data: list | None = None,  # list of dicts with keys "pos_err" and "error_gain"
+        action_noise: float = 0.0,
+        action_noise_type: NoiseType = "none",
+        torque_noise: float = 0.0,
+        torque_noise_type: NoiseType = "none",
+    ) -> None:
+        self.max_torque = max_torque  # Array of shape (NUM_OUTPUTS,)
+        self.kp = kp  # Array of shape (NUM_OUTPUTS,)
+        self.kd = kd  # Array of shape (NUM_OUTPUTS,)
+        self.error_gain = error_gain  # Array of shape (NUM_OUTPUTS
+        self.spline_knots = None
+        self.spline_coeffs = None
+        self.error_gain = error_gain
+        self.action_noise = action_noise
+        self.action_noise_type = action_noise_type
+        self.torque_noise = torque_noise
+        self.torque_noise_type = torque_noise_type
+
+    def get_ctrl(self, action: Array, physics_data: PhysicsData, rng: PRNGKeyArray) -> Array:
+        """Compute torque control using Feetech parameters and a cubic spline for error gain.
+
+        Assumes `action` is the target position.
+        """
+        pos_rng, tor_rng = jax.random.split(rng)
+        # Extract current joint positions and velocities (ignoring root if necessary)
+        current_pos = physics_data.qpos[7:]
+        current_vel = physics_data.qvel[6:]
+
+        # Compute position error (target minus current) and velocity error (assume target velocity is zero)
+        pos_error = action - current_pos
+        vel_error = -current_vel
+
+        # Compute the combined control (PD control law)
+        duty = self.kp * self.error_gain * pos_error + self.kd * vel_error
+
+        # Multiply by max torque, add torque noise, and clip to limits
+        torque = jnp.clip(
+            self.add_noise(self.torque_noise, self.torque_noise_type, duty * self.max_torque, tor_rng),
+            -self.max_torque,
+            self.max_torque,
+        )
+        # jax.debug.print(
+        #     "duty: {} torque: {} kp: {} kd: {} error_gain: {} pos_error: {} vel_error: {}",
+        #     duty,
+        #     torque,
+        #     self.kp,
+        #     self.kd,
+        #     self.error_gain,
+        #     pos_error,
+        #     vel_error,
+        # )
+        return torque
+
+    def get_default_action(self, physics_data: PhysicsData) -> Array:
+        # Default action: current joint positions.
+        return physics_data.qpos[7:]
 
 
 @attrs.define(frozen=True, kw_only=True)
@@ -205,7 +293,7 @@ class ZbotActor(eqx.Module):
     ) -> None:
         self.mlp = eqx.nn.MLP(
             in_size=NUM_INPUTS,
-            out_size=NUM_OUTPUTS * 2,
+            out_size=NUM_OUTPUTS * 2,  # Still need mean and std for each output
             width_size=64,
             depth=5,
             key=key,
@@ -341,10 +429,9 @@ class ZbotStandingTaskConfig(ksim.PPOConfig):
         help="Weight decay for the Adam optimizer.",
     )
 
-    # Mujoco parameters.
     use_mit_actuators: bool = xax.field(
         value=False,
-        help="Whether to use the MIT actuator model, where the actions are position + velocity commands",
+        help="Whether to use the MIT actuator model, where the actions are position commands",
     )
 
     # Rendering parameters.
@@ -381,6 +468,7 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
     def get_mujoco_model(self) -> mujoco.MjModel:
         # mjcf_path = (Path(self.config.robot_urdf_path) / "scene.mjcf").resolve().as_posix()
         mjcf_path = (Path(self.config.robot_urdf_path) / "robot.mjcf").resolve().as_posix()
+        print(f"Loading MJCF model from {mjcf_path}")
         mj_model = load_mjmodel(mjcf_path, scene="smooth")
 
         mj_model.opt.timestep = jnp.array(self.config.dt)
@@ -388,6 +476,49 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
         mj_model.opt.ls_iterations = 6
         mj_model.opt.disableflags = mjx.DisableBit.EULERDAMP
         mj_model.opt.solver = mjx.SolverType.CG
+
+        # Apply servo-specific parameters based on joint name suffix
+        for i in range(mj_model.njnt):
+            joint_name = mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_JOINT, i)
+            if joint_name is None or not any(suffix in joint_name for suffix in ["_15", "_50"]):
+                continue
+
+            dof_id = mj_model.jnt_dofadr[i]
+
+            # Apply parameters based on the joint suffix
+            if "_15" in joint_name:  # STS3215 servos (arms)
+                mj_model.dof_damping[dof_id] = FT_STS3215_PARAMS["damping"]
+                mj_model.dof_armature[dof_id] = FT_STS3215_PARAMS["armature"]
+                mj_model.dof_frictionloss[dof_id] = FT_STS3215_PARAMS["frictionloss"]
+
+                # Get base name for actuator (remove the _15 suffix)
+                base_name = joint_name.rsplit("_", 1)[0]
+                actuator_name = f"{base_name}_15_ctrl"
+
+                actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
+                if actuator_id >= 0:
+                    max_torque = float(FT_STS3215_PARAMS["max_torque"])
+                    mj_model.actuator_forcerange[actuator_id, :] = [
+                        -max_torque,
+                        max_torque,
+                    ]
+
+            elif "_50" in joint_name:  # STS3250 servos (legs)
+                mj_model.dof_damping[dof_id] = FT_STS3250_PARAMS["damping"]
+                mj_model.dof_armature[dof_id] = FT_STS3250_PARAMS["armature"]
+                mj_model.dof_frictionloss[dof_id] = FT_STS3250_PARAMS["frictionloss"]
+
+                # Get base name for actuator (remove the _50 suffix)
+                base_name = joint_name.rsplit("_", 1)[0]
+                actuator_name = f"{base_name}_50_ctrl"
+
+                actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
+                if actuator_id >= 0:
+                    max_torque = float(FT_STS3250_PARAMS["max_torque"])
+                    mj_model.actuator_forcerange[actuator_id, :] = [
+                        -max_torque,
+                        max_torque,
+                    ]
 
         return mj_model
 
@@ -402,53 +533,50 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
         physics_model: ksim.PhysicsModel,
         metadata: dict[str, JointMetadataOutput] | None = None,
     ) -> ksim.Actuators:
-        if self.config.use_mit_actuators:
-            if metadata is None:
-                raise ValueError("Metadata is required for MIT actuators")
-            return ksim.MITPositionVelocityActuators(
-                physics_model,
-                metadata,
-                pos_action_noise=0.1,
-                vel_action_noise=0.1,
-                pos_action_noise_type="gaussian",
-                vel_action_noise_type="gaussian",
-                ctrl_clip=[
-                    # right arm
-                    MAX_TORQUE["03"],
-                    MAX_TORQUE["03"],
-                    MAX_TORQUE["02"],
-                    MAX_TORQUE["00"],
-                    # left arm
-                    MAX_TORQUE["03"],
-                    MAX_TORQUE["03"],
-                    MAX_TORQUE["02"],
-                    MAX_TORQUE["00"],
-                    # right leg
-                    MAX_TORQUE["04"],
-                    MAX_TORQUE["03"],
-                    MAX_TORQUE["03"],
-                    MAX_TORQUE["04"],
-                    MAX_TORQUE["02"],
-                    # left leg
-                    MAX_TORQUE["04"],
-                    MAX_TORQUE["03"],
-                    MAX_TORQUE["03"],
-                    MAX_TORQUE["04"],
-                    MAX_TORQUE["02"],
-                    # additional joints for feet
-                    MAX_TORQUE["00"],
-                    MAX_TORQUE["00"],
-                ],
-            )
-        else:
-            return ksim.TorqueActuators()
+        if metadata is not None:
+            joint_names = sorted(metadata.keys())
+
+        num_joints = len(joint_names)
+        max_torque_arr = jnp.zeros(num_joints)
+        error_gain_arr = jnp.zeros(num_joints)
+        kp_arr = jnp.zeros(num_joints)
+        kd_arr = jnp.zeros(num_joints)
+
+        for i, joint_name in enumerate(joint_names):
+            if "_15" in joint_name:
+                max_torque_arr = max_torque_arr.at[i].set(FT_STS3215_PARAMS["max_torque"])
+                error_gain_arr = error_gain_arr.at[i].set(FT_STS3215_PARAMS["error_gain"])
+                # Temporary: set constant kp/kd for STS3215 joints (arms)
+                kp_arr = kp_arr.at[i].set(20.0)
+                kd_arr = kd_arr.at[i].set(10.0)
+            elif "_50" in joint_name:
+                max_torque_arr = max_torque_arr.at[i].set(FT_STS3250_PARAMS["max_torque"])
+                error_gain_arr = error_gain_arr.at[i].set(FT_STS3250_PARAMS["error_gain"])
+                # Temporary: set constant kp/kd for STS3250 joints (legs)
+                kp_arr = kp_arr.at[i].set(100.0)
+                kd_arr = kd_arr.at[i].set(10.0)
+            else:
+                # For joints without a specific suffix, assign default values.
+                # We should exit here if we don't have a valid joint name.
+                raise ValueError(f"Invalid joint name: {joint_name}")
+
+        return FeetechActuators(
+            max_torque=max_torque_arr,
+            kp=kp_arr,
+            kd=kd_arr,
+            error_gain=error_gain_arr,
+            action_noise=0.0,
+            action_noise_type="none",
+            torque_noise=0.0,
+            torque_noise_type="none",
+        )
 
     def get_randomization(self, physics_model: ksim.PhysicsModel) -> list[ksim.Randomization]:
         return [
             ksim.StaticFrictionRandomization(scale_lower=0.5, scale_upper=2.0),
             ksim.JointZeroPositionRandomization(scale_lower=-0.05, scale_upper=0.05),
             ksim.ArmatureRandomization(scale_lower=1.0, scale_upper=1.05),
-            ksim.MassMultiplicationRandomization.from_body_name(physics_model, "Z_BOT2_MASTER_BODY_SKELETON"),
+            ksim.MassMultiplicationRandomization.from_body_name(physics_model, "Top_Brace"),
             ksim.JointDampingRandomization(scale_lower=0.95, scale_upper=1.05),
             # ksim.FloorFrictionRandomization.from_body_name(
             #     model=physics_model,
@@ -467,7 +595,7 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
                 default_targets=(
                     0.0,
                     0.0,
-                    0.40,  # Lower height from 0.91 to 0.41
+                    0.40,
                     1.0,
                     0.0,
                     0.0,
@@ -539,8 +667,8 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
             ),
             ksim.JointVelocityObservation(noise=0.5),
             ksim.ActuatorForceObservation(),
-            ksim.SensorObservation.create(physics_model, "IMU_acc", noise=0.5),
-            ksim.SensorObservation.create(physics_model, "IMU_gyro", noise=0.2),
+            ksim.SensorObservation.create(physics_model, "IMU_2_acc", noise=0.5),
+            ksim.SensorObservation.create(physics_model, "IMU_2_gyro", noise=0.2),
             LastActionObservation(noise=0.0),
             HistoryObservation(),
         ]
@@ -621,8 +749,8 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
     ) -> distrax.Normal:
         joint_pos_n = observations["joint_position_observation"]
         joint_vel_n = observations["joint_velocity_observation"]
-        imu_acc_3 = observations["IMU_acc_obs"]
-        imu_gyro_3 = observations["IMU_gyro_obs"]
+        imu_acc_3 = observations["IMU_2_acc_obs"]
+        imu_gyro_3 = observations["IMU_2_gyro_obs"]
         lin_vel_cmd_2 = commands["linear_velocity_step_command"]
         last_action_n = observations["last_action_observation"]
         history_n = observations["history_observation"]
@@ -636,8 +764,8 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
     ) -> Array:
         joint_pos_n = observations["joint_position_observation"]
         joint_vel_n = observations["joint_velocity_observation"]
-        imu_acc_3 = observations["IMU_acc_obs"]
-        imu_gyro_3 = observations["IMU_gyro_obs"]
+        imu_acc_3 = observations["IMU_2_acc_obs"]
+        imu_gyro_3 = observations["IMU_2_gyro_obs"]
         lin_vel_cmd_2 = commands["linear_velocity_step_command"]
         last_action_n = observations["last_action_observation"]
         history_n = observations["history_observation"]
@@ -712,8 +840,8 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
 
         joint_pos_n = observations["joint_position_observation"]
         joint_vel_n = observations["joint_velocity_observation"]
-        imu_acc_3 = observations["IMU_acc_obs"]
-        imu_gyro_3 = observations["IMU_gyro_obs"]
+        imu_acc_3 = observations["IMU_2_acc_obs"]
+        imu_gyro_3 = observations["IMU_2_gyro_obs"]
         lin_vel_cmd_2 = commands["linear_velocity_step_command"]
         last_action_n = observations["last_action_observation"]
         history_n = jnp.concatenate(
@@ -775,9 +903,9 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
 
         model_fn = self.make_export_model(model, stochastic=False, batched=True)
 
-        input_shapes = [(NUM_INPUTS,)]
+        input_shapes: list[tuple[int, ...]] = [(NUM_INPUTS,)]
 
-        xax.export(  # type: ignore[operator]
+        export(
             model_fn,
             input_shapes,
             ckpt_path.parent / "tf_model",
@@ -803,9 +931,9 @@ if __name__ == "__main__":
             ctrl_dt=0.02,
             max_action_latency=0.005,
             min_action_latency=0.0,
-            valid_every_n_steps=25,
+            valid_every_n_steps=5,
             valid_first_n_steps=0,
-            save_every_n_steps=25,
+            save_every_n_steps=5,
             rollout_length_seconds=5.0,
             # PPO parameters
             gamma=0.97,
@@ -814,7 +942,6 @@ if __name__ == "__main__":
             learning_rate=1e-4,
             clip_param=0.3,
             max_grad_norm=1.0,
-            use_mit_actuators=True,
             export_for_inference=True,
         ),
     )
