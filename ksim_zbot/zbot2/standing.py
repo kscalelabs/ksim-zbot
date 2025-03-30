@@ -14,15 +14,14 @@ import ksim
 import mujoco
 import optax
 import xax
-from scipy.interpolate import CubicSpline
 from flax.core import FrozenDict
 from jaxtyping import Array, PRNGKeyArray
 from kscale.web.gen.api import JointMetadataOutput
+from ksim.actuators import Actuators, NoiseType
+from ksim.types import PhysicsData
 from mujoco import mjx
 from mujoco_scenes.mjcf import load_mjmodel
 from xax.nn.export import export
-from ksim.types import PhysicsData
-from ksim.actuators import Actuators, NoiseType
 
 OBS_SIZE = 20 * 2 + 3 + 3 + 20  # position + velocity + imu_acc + imu_gyro + last_action
 CMD_SIZE = 2
@@ -93,10 +92,10 @@ class FeetechActuators(Actuators):
         torque_noise: float = 0.0,
         torque_noise_type: NoiseType = "none",
     ) -> None:
-        self.max_torque = max_torque      # Array of shape (NUM_OUTPUTS,)
-        self.kp = kp                      # Array of shape (NUM_OUTPUTS,)
-        self.kd = kd                      # Array of shape (NUM_OUTPUTS,)
-        self.error_gain = error_gain      # Array of shape (NUM_OUTPUTS
+        self.max_torque = max_torque  # Array of shape (NUM_OUTPUTS,)
+        self.kp = kp  # Array of shape (NUM_OUTPUTS,)
+        self.kd = kd  # Array of shape (NUM_OUTPUTS,)
+        self.error_gain = error_gain  # Array of shape (NUM_OUTPUTS
         self.spline_knots = None
         self.spline_coeffs = None
         self.error_gain = error_gain
@@ -104,9 +103,10 @@ class FeetechActuators(Actuators):
         self.action_noise_type = action_noise_type
         self.torque_noise = torque_noise
         self.torque_noise_type = torque_noise_type
+
     def get_ctrl(self, action: Array, physics_data: PhysicsData, rng: PRNGKeyArray) -> Array:
-        """
-        Compute torque control using Feetech parameters and a cubic spline for error gain.
+        """Compute torque control using Feetech parameters and a cubic spline for error gain.
+
         Assumes `action` is the target position.
         """
         pos_rng, tor_rng = jax.random.split(rng)
@@ -118,11 +118,8 @@ class FeetechActuators(Actuators):
         pos_error = action - current_pos
         vel_error = -current_vel
 
-        error_gain = self.error_gain
-
         # Compute the combined control (PD control law)
         duty = self.kp * self.error_gain * pos_error + self.kd * vel_error
-       
 
         # Multiply by max torque, add torque noise, and clip to limits
         torque = jnp.clip(
@@ -130,7 +127,16 @@ class FeetechActuators(Actuators):
             -self.max_torque,
             self.max_torque,
         )
-        #jax.debug.print("duty: {} torque: {} kp: {} kd: {} error_gain: {} pos_error: {} vel_error: {}", duty, torque, self.kp, self.kd, self.error_gain, pos_error, vel_error)
+        # jax.debug.print(
+        #     "duty: {} torque: {} kp: {} kd: {} error_gain: {} pos_error: {} vel_error: {}",
+        #     duty,
+        #     torque,
+        #     self.kp,
+        #     self.kd,
+        #     self.error_gain,
+        #     pos_error,
+        #     vel_error,
+        # )
         return torque
 
     def get_default_action(self, physics_data: PhysicsData) -> Array:
@@ -526,7 +532,7 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
     ) -> ksim.Actuators:
         if metadata is not None:
             joint_names = sorted(metadata.keys())
-        
+
         num_joints = len(joint_names)
         max_torque_arr = jnp.zeros(num_joints)
         error_gain_arr = jnp.zeros(num_joints)
@@ -561,7 +567,6 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
             torque_noise=0.0,
             torque_noise_type="none",
         )
-
 
     def get_randomization(self, physics_model: ksim.PhysicsModel) -> list[ksim.Randomization]:
         return [
