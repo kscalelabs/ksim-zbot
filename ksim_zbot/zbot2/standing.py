@@ -340,14 +340,20 @@ class FeetechActuators(Actuators):
             def _eval_spline(x_val):
                 lower = self.spline_knots[0]
                 upper = self.spline_knots[-1]
-                # Clip x_val within the spline range.
-                x_val_clipped = jnp.clip(x_val, lower, upper)
-                idx = jnp.clip(jnp.searchsorted(self.spline_knots, x_val_clipped) - 1, 0, self.spline_knots.shape[0] - 2)
-                dx = x_val_clipped - self.spline_knots[idx]
-                return (self.spline_coeffs[0, idx] * dx**3 +
-                        self.spline_coeffs[1, idx] * dx**2 +
-                        self.spline_coeffs[2, idx] * dx +
-                        self.spline_coeffs[3, idx])
+                # Saturate x_val explicitly
+                x_val_sat = jnp.where(x_val <= lower, lower, jnp.where(x_val >= upper, upper, x_val))
+                #jax.debug.print("Original x_val: {}, Saturated x_val: {}", x_val, x_val_sat)
+                
+                idx = jnp.clip(jnp.searchsorted(self.spline_knots, x_val_sat) - 1, 0, self.spline_knots.shape[0] - 2)           
+                dx = x_val_sat - self.spline_knots[idx]
+                
+                spline_value = (self.spline_coeffs[0, idx] * dx**3 +
+                                self.spline_coeffs[1, idx] * dx**2 +
+                                self.spline_coeffs[2, idx] * dx +
+                                self.spline_coeffs[3, idx])
+                #jax.debug.print("spline_value: {}", spline_value)
+                return spline_value
+
             # Evaluate the spline on the absolute value of the position error.
             error_gain = jax.vmap(_eval_spline)(jnp.abs(pos_error))
         else:
