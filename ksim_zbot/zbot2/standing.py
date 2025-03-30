@@ -286,41 +286,37 @@ class FeetechActuators(Actuators):
 
     def __init__(
         self,
-        max_torque: float,
-        vin: float,
-        kt: float,
-        R: float,
-        error_gain: float = None,      # fallback constant if no spline is provided
-        error_gain_data: list = None,  # list of dicts with keys "pos_err" and "error_gain"
+        max_torque: Array,
+        kp: Array,
+        kd: Array,
+        error_gain: Array,
+        #error_gain_data: list = None,  # list of dicts with keys "pos_err" and "error_gain"
         action_noise: float = 0.0,
         action_noise_type: NoiseType = "none",
         torque_noise: float = 0.0,
         torque_noise_type: NoiseType = "none",
     ) -> None:
-        self.max_torque = max_torque
-        self.vin = vin
-        self.kt = kt
-        self.R = R
-        self.kp = 32
-        self.kd = 32
-        if error_gain_data is not None:
+        self.max_torque = max_torque      # Array of shape (NUM_OUTPUTS,)
+        self.kp = kp                      # Array of shape (NUM_OUTPUTS,)
+        self.kd = kd                      # Array of shape (NUM_OUTPUTS,)
+        self.error_gain = error_gain      # Array of shape (NUM_OUTPUTS
+        #if error_gain_data is not None:
             # Extract x (position error) and y (error gain) values.
-            x_vals = [d["pos_err"] for d in error_gain_data]
-            y_vals = [d["error_gain"] for d in error_gain_data]
-            cs = CubicSpline(x_vals, y_vals, extrapolate=True)
+            #x_vals = [d["pos_err"] for d in error_gain_data]
+            #y_vals = [d["error_gain"] for d in error_gain_data]
+            #cs = CubicSpline(x_vals, y_vals, extrapolate=True)
             # Store spline knots and coefficients as JAX arrays.
-            self.spline_knots = jnp.array(cs.x)
-            self.spline_coeffs = jnp.array(cs.c)
-            self.error_gain = None  # not used when spline is active
-        else:
-            self.spline_knots = None
-            self.spline_coeffs = None
-            self.error_gain = error_gain
+        #    self.spline_knots = jnp.array(cs.x)
+        #    self.spline_coeffs = jnp.array(cs.c)
+        #    self.error_gain = None  # not used when spline is active
+        #else:
+        #    self.spline_knots = None
+        #    self.spline_coeffs = None
+        self.error_gain = error_gain
         self.action_noise = action_noise
         self.action_noise_type = action_noise_type
         self.torque_noise = torque_noise
         self.torque_noise_type = torque_noise_type
-
     def get_ctrl(self, action: Array, physics_data: PhysicsData, rng: PRNGKeyArray) -> Array:
         """
         Compute torque control using Feetech parameters and a cubic spline for error gain.
@@ -335,32 +331,33 @@ class FeetechActuators(Actuators):
         pos_error = action - current_pos
         vel_error = -current_vel
 
-        if self.spline_knots is not None:
+        #if self.spline_knots is not None:
             # Define a function to evaluate the cubic spline with saturation.
-            def _eval_spline(x_val):
-                lower = self.spline_knots[0]
-                upper = self.spline_knots[-1]
+            #def _eval_spline(x_val):
+                #lower = self.spline_knots[0]
+                #upper = self.spline_knots[-1]
                 # Saturate x_val explicitly
-                x_val_sat = jnp.where(x_val <= lower, lower, jnp.where(x_val >= upper, upper, x_val))
+                #x_val_sat = jnp.where(x_val <= lower, lower, jnp.where(x_val >= upper, upper, x_val))
                 #jax.debug.print("Original x_val: {}, Saturated x_val: {}", x_val, x_val_sat)
                 
-                idx = jnp.clip(jnp.searchsorted(self.spline_knots, x_val_sat) - 1, 0, self.spline_knots.shape[0] - 2)           
-                dx = x_val_sat - self.spline_knots[idx]
+                #idx = jnp.clip(jnp.searchsorted(self.spline_knots, x_val_sat) - 1, 0, self.spline_knots.shape[0] - 2)           
+                #dx = x_val_sat - self.spline_knots[idx]
                 
-                spline_value = (self.spline_coeffs[0, idx] * dx**3 +
-                                self.spline_coeffs[1, idx] * dx**2 +
-                                self.spline_coeffs[2, idx] * dx +
-                                self.spline_coeffs[3, idx])
+                #spline_value = (self.spline_coeffs[0, idx] * dx**3 +
+                #                self.spline_coeffs[1, idx] * dx**2 +
+                #                self.spline_coeffs[2, idx] * dx +
+                #                self.spline_coeffs[3, idx])
                 #jax.debug.print("spline_value: {}", spline_value)
-                return spline_value
+                #return spline_value
 
             # Evaluate the spline on the absolute value of the position error.
-            error_gain = jax.vmap(_eval_spline)(jnp.abs(pos_error))
-        else:
-            error_gain = self.error_gain
+            #error_gain = jax.vmap(_eval_spline)(jnp.abs(pos_error))
+        #else:
+            #error_gain = self.error_gain
 
         # Compute the combined control (PD control law)
-        duty = self.kp * error_gain * pos_error + self.kd * vel_error
+        duty = self.kp * self.error_gain * pos_error + self.kd * vel_error
+       
 
         # Multiply by max torque, add torque noise, and clip to limits
         torque = jnp.clip(
@@ -368,6 +365,7 @@ class FeetechActuators(Actuators):
             -self.max_torque,
             self.max_torque,
         )
+        #jax.debug.print("duty: {} torque: {} kp: {} kd: {} error_gain: {} pos_error: {} vel_error: {}", duty, torque, self.kp, self.kd, self.error_gain, pos_error, vel_error)
         return torque
 
     def get_default_action(self, physics_data: PhysicsData) -> Array:
@@ -727,7 +725,7 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
 
                 actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
                 if actuator_id >= 0:
-                    mj_model.actuator_ctrlrange[actuator_id, :] = [
+                    mj_model.actuator_forcerange[actuator_id, :] = [
                         -FT_STS3215_PARAMS["max_torque"],
                         FT_STS3215_PARAMS["max_torque"],
                     ]
@@ -743,7 +741,7 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
 
                 actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
                 if actuator_id >= 0:
-                    mj_model.actuator_ctrlrange[actuator_id, :] = [
+                    mj_model.actuator_forcerange[actuator_id, :] = [
                         -FT_STS3250_PARAMS["max_torque"],
                         FT_STS3250_PARAMS["max_torque"],
                     ]
@@ -761,18 +759,44 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
         physics_model: ksim.PhysicsModel,
         metadata: dict[str, JointMetadataOutput] | None = None,
     ) -> ksim.Actuators:
+        if metadata is not None:
+            joint_names = sorted(metadata.keys())
+        
+        num_joints = len(joint_names)
+        max_torque_arr = jnp.zeros(num_joints)
+        error_gain_arr = jnp.zeros(num_joints)
+        kp_arr = jnp.zeros(num_joints)
+        kd_arr = jnp.zeros(num_joints)
+
+        for i, joint_name in enumerate(joint_names):
+            if "_15" in joint_name:
+                max_torque_arr = max_torque_arr.at[i].set(FT_STS3215_PARAMS["max_torque"])
+                error_gain_arr = error_gain_arr.at[i].set(FT_STS3215_PARAMS["error_gain"])
+                # Temporary: set constant kp/kd for STS3215 joints (arms)
+                kp_arr = kp_arr.at[i].set(20.0)
+                kd_arr = kd_arr.at[i].set(10.0)
+            elif "_50" in joint_name:
+                max_torque_arr = max_torque_arr.at[i].set(FT_STS3250_PARAMS["max_torque"])
+                error_gain_arr = error_gain_arr.at[i].set(FT_STS3250_PARAMS["error_gain"])
+                # Temporary: set constant kp/kd for STS3250 joints (legs)
+                kp_arr = kp_arr.at[i].set(100.0)
+                kd_arr = kd_arr.at[i].set(10.0)
+            else:
+                # For joints without a specific suffix, assign default values.
+                # We should exit here if we don't have a valid joint name.
+                pass
+
         return FeetechActuators(
-            max_torque=FT_STS3250_PARAMS["max_torque"],
-            vin=FT_STS3250_PARAMS["vin"],
-            kt=FT_STS3250_PARAMS["kt"],
-            R=FT_STS3250_PARAMS["R"],
-            #error_gain=FT_STS3250_PARAMS["error_gain"],
-            error_gain_data=FT_STS3215_PARAMS["error_gain_data"],
+            max_torque=max_torque_arr,
+            kp=kp_arr,
+            kd=kd_arr,
+            error_gain=error_gain_arr,
             action_noise=0.0,
             action_noise_type="none",
             torque_noise=0.0,
             torque_noise_type="none",
         )
+
 
     def get_randomization(self, physics_model: ksim.PhysicsModel) -> list[ksim.Randomization]:
         return [
