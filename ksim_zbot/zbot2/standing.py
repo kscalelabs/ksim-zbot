@@ -455,63 +455,47 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
         mj_model.opt.disableflags = mjx.DisableBit.EULERDAMP
         mj_model.opt.solver = mjx.SolverType.CG
 
-        # Apply servo-specific parameters to joints
-        # Joint names for arms (STS3215)
-        arm_joint_names = [
-            "right_shoulder_yaw", "right_shoulder_pitch", "right_elbow_yaw", "right_gripper",
-            "left_shoulder_yaw", "left_shoulder_pitch", "left_elbow_yaw", "left_gripper"
-        ]
-        
-        # Joint names for legs (STS3250)
-        leg_joint_names = [
-            "left_hip_yaw", "left_hip_roll", "left_hip_pitch", "left_knee_pitch", 
-            "left_ankle_pitch", "left_ankle_roll", "right_hip_yaw", "right_hip_roll", 
-            "right_hip_pitch", "right_knee_pitch", "right_ankle_pitch", "right_ankle_roll"
-        ]
-        
-        # Apply parameters to arm joints (STS3215)
-        for joint_name in arm_joint_names:
-            try:
-                joint_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
-                dof_id = mj_model.jnt_dofadr[joint_id]
+        # Apply servo-specific parameters based on joint name suffix
+        for i in range(mj_model.njnt):
+            joint_name = mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_JOINT, i)
+            if joint_name is None or not any(suffix in joint_name for suffix in ["_15", "_50"]):
+                continue
                 
-                # Apply STS3215 parameters
+            dof_id = mj_model.jnt_dofadr[i]
+            
+            # Apply parameters based on the joint suffix
+            if "_15" in joint_name:  # STS3215 servos (arms)
                 mj_model.dof_damping[dof_id] = FT_STS3215_PARAMS["kd"]
                 mj_model.dof_armature[dof_id] = FT_STS3215_PARAMS["armature"]
                 mj_model.dof_frictionloss[dof_id] = FT_STS3215_PARAMS["frictionloss"]
                 
-                # Find associated actuator and set its control range
-                actuator_name = f"{joint_name}_ctrl"
+                # Get base name for actuator (remove the _15 suffix)
+                base_name = joint_name.rsplit("_", 1)[0]
+                actuator_name = f"{base_name}_15_ctrl"
+                
                 actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
                 if actuator_id >= 0:
                     mj_model.actuator_ctrlrange[actuator_id, :] = [
                         -FT_STS3215_PARAMS["max_torque"], 
                         FT_STS3215_PARAMS["max_torque"]
                     ]
-            except Exception as e:
-                print(f"Warning: Could not apply parameters to joint {joint_name}: {e}")
-        
-        # Apply parameters to leg joints (STS3250)
-        for joint_name in leg_joint_names:
-            try:
-                joint_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
-                dof_id = mj_model.jnt_dofadr[joint_id]
-                
-                # Apply STS3250 parameters
+            
+            elif "_50" in joint_name:  # STS3250 servos (legs)
                 mj_model.dof_damping[dof_id] = FT_STS3250_PARAMS["kd"]
                 mj_model.dof_armature[dof_id] = FT_STS3250_PARAMS["armature"]
                 mj_model.dof_frictionloss[dof_id] = FT_STS3250_PARAMS["frictionloss"]
                 
-                # Find associated actuator and set its control range
-                actuator_name = f"{joint_name}_ctrl"
+                # Get base name for actuator (remove the _50 suffix)
+                base_name = joint_name.rsplit("_", 1)[0]
+                actuator_name = f"{base_name}_50_ctrl"
+                breakpoint()
+                
                 actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
                 if actuator_id >= 0:
                     mj_model.actuator_ctrlrange[actuator_id, :] = [
                         -FT_STS3250_PARAMS["max_torque"], 
                         FT_STS3250_PARAMS["max_torque"]
                     ]
-            except Exception as e:
-                print(f"Warning: Could not apply parameters to joint {joint_name}: {e}")
 
         return mj_model
 
