@@ -316,8 +316,8 @@ class FeetechActuators(Actuators):
             self.spline_coeffs = spline_coeffs
             self.error_gain = jnp.array([])  # Assign an empty Array when splines are active.
         else:
-            self.spline_knots = None
-            self.spline_coeffs = None
+            self.spline_knots = []
+            self.spline_coeffs = []
             self.error_gain = error_gain
         self.action_noise = action_noise
         self.action_noise_type = action_noise_type
@@ -339,7 +339,7 @@ class FeetechActuators(Actuators):
         vel_error = -current_vel
 
         # If spline parameters exist, use them per joint.
-        if self.spline_knots is not None and self.spline_coeffs is not None:
+        if self.spline_knots and self.spline_coeffs:
 
             def _eval_spline(x_val: Array, knots: Array, coeffs: Array) -> Array:
                 lower = knots[0]
@@ -781,40 +781,41 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
         if metadata is not None:
             joint_names = sorted(metadata.keys())
 
-        num_joints = len(joint_names)
-        max_torque_arr = jnp.zeros(num_joints)
-        error_gain_arr = jnp.zeros(num_joints)
-        kp_arr = jnp.zeros(num_joints)
-        kd_arr = jnp.zeros(num_joints)
+            num_joints = len(joint_names)
+            max_torque_arr = jnp.zeros(num_joints)
+            error_gain_arr = jnp.zeros(num_joints)
+            kp_arr = jnp.zeros(num_joints)
+            kd_arr = jnp.zeros(num_joints)
 
-        # Build a list of error_gain_data (one entry per joint)
-        error_gain_data_list = []
+            # Build a list of error_gain_data (one entry per joint)
+            error_gain_data_list = []
 
-        for i, joint_name in enumerate(joint_names):
-            joint_meta = metadata[joint_name]
-            if "_15" in joint_name:
-                max_torque_arr = max_torque_arr.at[i].set(FT_STS3215_PARAMS["max_torque"])
-                error_gain_arr = error_gain_arr.at[i].set(FT_STS3215_PARAMS["error_gain"])
-                error_gain_data_list.append(FT_STS3215_PARAMS.get("error_gain_data"))
-            elif "_50" in joint_name:
-                max_torque_arr = max_torque_arr.at[i].set(FT_STS3250_PARAMS["max_torque"])
-                error_gain_arr = error_gain_arr.at[i].set(FT_STS3250_PARAMS["error_gain"])
-                error_gain_data_list.append(FT_STS3250_PARAMS.get("error_gain_data"))
-            else:
-                # For joints without a specific suffix, assign default values.
-                # We should exit here if we don't have a valid joint name.
-                raise ValueError(f"Invalid joint name: {joint_name}")
+            for i, joint_name in enumerate(joint_names):
+                joint_meta = metadata[joint_name]
+                if "_15" in joint_name:
+                    max_torque_arr = max_torque_arr.at[i].set(FT_STS3215_PARAMS["max_torque"])
+                    error_gain_arr = error_gain_arr.at[i].set(FT_STS3215_PARAMS["error_gain"])
+                    error_gain_data_list.append(FT_STS3215_PARAMS.get("error_gain_data"))
+                elif "_50" in joint_name:
+                    max_torque_arr = max_torque_arr.at[i].set(FT_STS3250_PARAMS["max_torque"])
+                    error_gain_arr = error_gain_arr.at[i].set(FT_STS3250_PARAMS["error_gain"])
+                    error_gain_data_list.append(FT_STS3250_PARAMS.get("error_gain_data"))
+                else:
+                    # For joints without a specific suffix, assign default values.
+                    # We should exit here if we don't have a valid joint name.
+                    raise ValueError(f"Invalid joint name: {joint_name}")
 
-            # Set kp/kd from metadata (converted from string)
-            try:
-                kp_val = float(joint_meta.kp) if joint_meta.kp is not None else 0.0
-                kd_val = float(joint_meta.kd) if joint_meta.kd is not None else 0.0
-            except ValueError as e:
-                raise ValueError(f"Could not convert kp/kd gains to a float for joint {joint_name}: {e}")
+                # Set kp/kd from metadata (converted from string)
+                try:
+                    kp_val = float(joint_meta.kp) if joint_meta.kp is not None else 0.0
+                    kd_val = float(joint_meta.kd) if joint_meta.kd is not None else 0.0
+                except ValueError as e:
+                    raise ValueError(f"Could not convert kp/kd gains to a float for joint {joint_name}: {e}")
 
-            kp_arr = kp_arr.at[i].set(kp_val)
-            kd_arr = kd_arr.at[i].set(kd_val)
-
+                kp_arr = kp_arr.at[i].set(kp_val)
+                kd_arr = kd_arr.at[i].set(kd_val)
+        else:
+            raise ValueError("Metadata is not available")
         return FeetechActuators(
             max_torque=max_torque_arr,
             kp=kp_arr,
