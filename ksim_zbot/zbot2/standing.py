@@ -299,13 +299,9 @@ class FeetechActuators(Actuators):
         self.max_torque = max_torque  # Array of shape (NUM_OUTPUTS,)
         self.kp = kp  # Array of shape (NUM_OUTPUTS,)
         self.kd = kd  # Array of shape (NUM_OUTPUTS,)
-        self.error_gain = error_gain  # Array of shape (NUM_OUTPUTS
-        self.spline_knots = None
-        self.spline_coeffs = None
-        self.error_gain = error_gain
         if error_gain_data is not None:
-            spline_knots = []
-            spline_coeffs = []
+            spline_knots: list[Array] = []
+            spline_coeffs: list[Array] = []
             for ed in error_gain_data:
                 if ed is not None:
                     x_vals = [d["pos_err"] for d in ed]
@@ -314,11 +310,11 @@ class FeetechActuators(Actuators):
                     spline_knots.append(jnp.array(cs.x))
                     spline_coeffs.append(jnp.array(cs.c))
                 else:
-                    spline_knots.append(None)
-                    spline_coeffs.append(None)
+                    spline_knots.append(jnp.array([]))  # Use empty array instead of None
+                    spline_coeffs.append(jnp.array([]))
             self.spline_knots = spline_knots
             self.spline_coeffs = spline_coeffs
-            self.error_gain = None  # Not used when spline is active.
+            self.error_gain = jnp.array([])  # Assign an empty Array when splines are active.
         else:
             self.spline_knots = None
             self.spline_coeffs = None
@@ -343,7 +339,7 @@ class FeetechActuators(Actuators):
         vel_error = -current_vel
 
         # If spline parameters exist, use them per joint.
-        if self.spline_knots is not None:
+        if self.spline_knots is not None and self.spline_coeffs is not None:
 
             def _eval_spline(x_val: Array, knots: Array, coeffs: Array) -> Array:
                 lower = knots[0]
@@ -354,10 +350,10 @@ class FeetechActuators(Actuators):
                 spline_value = coeffs[0, idx] * dx**3 + coeffs[1, idx] * dx**2 + coeffs[2, idx] * dx + coeffs[3, idx]
                 return spline_value
 
-            # Loop over each joint to compute its error_gain.
             error_gain_list = []
             for i in range(pos_error.shape[0]):
-                if self.spline_knots[i] is not None:
+                # Use spline interpolation if the current joint has non-empty spline data.
+                if self.spline_knots[i].size > 0:
                     eg = _eval_spline(jnp.abs(pos_error[i]), self.spline_knots[i], self.spline_coeffs[i])
                 else:
                     eg = self.error_gain[i]
