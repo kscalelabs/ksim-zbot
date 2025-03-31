@@ -102,7 +102,7 @@ class FeetechActuators(Actuators):
         else:  # I don't like this, need to fix
             self.spline_knots = []
             self.spline_coeffs = []
-            self.error_gain = 0
+            self.error_gain = jnp.array(0.0)
 
         self.action_noise = action_noise
         self.action_noise_type = action_noise_type
