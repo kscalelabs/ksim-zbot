@@ -20,9 +20,9 @@ from ksim.actuators import Actuators, NoiseType
 from ksim.types import PhysicsData
 from mujoco import mjx
 from mujoco_scenes.mjcf import load_mjmodel
+from scipy.interpolate import CubicSpline
 from xax.nn.export import export
 from xax.utils.types.frozen_dict import FrozenDict
-from scipy.interpolate import CubicSpline
 
 OBS_SIZE = 20 * 2 + 3 + 3 + 20  # position + velocity + imu_acc + imu_gyro + last_action
 CMD_SIZE = 2
@@ -344,18 +344,14 @@ class FeetechActuators(Actuators):
 
         # If spline parameters exist, use them per joint.
         if self.spline_knots is not None:
-            def _eval_spline(x_val, knots, coeffs):
+
+            def _eval_spline(x_val: Array, knots: Array, coeffs: Array) -> Array:
                 lower = knots[0]
                 upper = knots[-1]
                 x_val_sat = jnp.where(x_val <= lower, lower, jnp.where(x_val >= upper, upper, x_val))
                 idx = jnp.clip(jnp.searchsorted(knots, x_val_sat) - 1, 0, knots.shape[0] - 2)
                 dx = x_val_sat - knots[idx]
-                spline_value = (
-                    coeffs[0, idx] * dx**3 +
-                    coeffs[1, idx] * dx**2 +
-                    coeffs[2, idx] * dx +
-                    coeffs[3, idx]
-                )
+                spline_value = coeffs[0, idx] * dx**3 + coeffs[1, idx] * dx**2 + coeffs[2, idx] * dx + coeffs[3, idx]
                 return spline_value
 
             # Loop over each joint to compute its error_gain.
@@ -813,7 +809,7 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
                 # We should exit here if we don't have a valid joint name.
                 raise ValueError(f"Invalid joint name: {joint_name}")
 
-             # Set kp/kd from metadata (converted from string)
+            # Set kp/kd from metadata (converted from string)
             try:
                 kp_val = float(joint_meta.kp) if joint_meta.kp is not None else 0.0
                 kd_val = float(joint_meta.kd) if joint_meta.kd is not None else 0.0
