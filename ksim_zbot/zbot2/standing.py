@@ -3,7 +3,7 @@
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Generic, TypeVar
+from typing import Callable, Generic, List, TypedDict, TypeVar
 
 import attrs
 import distrax
@@ -34,8 +34,22 @@ HISTORY_LENGTH = 0
 
 NUM_INPUTS = (OBS_SIZE + CMD_SIZE) + SINGLE_STEP_HISTORY_SIZE * HISTORY_LENGTH
 
+
+class FeetechParams(TypedDict):
+    sysid: str
+    max_torque: float
+    armature: float
+    frictionloss: float
+    damping: float
+    vin: float
+    kt: float
+    R: float
+    error_gain_data: List[dict[str, float]]
+    error_gain: float
+
+
 # Feetech parameters from Scott's modelling
-FT_STS3215_PARAMS = {
+FT_STS3215_PARAMS: FeetechParams = {
     "sysid": "sts3215-12v-id009",  # Traceable ID @ github.com/kscalelabs/sysid
     "max_torque": 5.466091040935576,
     "armature": 0.039999999991812,
@@ -149,7 +163,7 @@ FT_STS3215_PARAMS = {
 }
 
 
-FT_STS3250_PARAMS = {
+FT_STS3250_PARAMS: FeetechParams = {
     "sysid": "sts3250-id008",  # Traceable ID @ github.com/kscalelabs/sysid
     "max_torque": 8.716130441407099,
     "armature": 0.03999977737144798,
