@@ -32,29 +32,29 @@ class Actuator:
 
 ACTUATOR_LIST: list[Actuator] = [
     # Right arm (nn_id 0-4)
-    Actuator(actuator_id=21, nn_id=0, kp=120.0, kd=5.0, max_torque=40.0, joint_name="dof_right_shoulder_pitch_03"),
-    Actuator(actuator_id=22, nn_id=1, kp=120.0, kd=5.0, max_torque=40.0, joint_name="dof_right_shoulder_roll_03"),
-    Actuator(actuator_id=23, nn_id=2, kp=50.0, kd=1.0, max_torque=20.0, joint_name="dof_right_shoulder_yaw_02"),
-    Actuator(actuator_id=24, nn_id=3, kp=50.0, kd=1.0, max_torque=20.0, joint_name="dof_right_elbow_02"),
-    Actuator(actuator_id=25, nn_id=4, kp=50.0, kd=1.0, max_torque=20.0, joint_name="dof_right_wrist_00"),
+    Actuator(actuator_id=21, nn_id=0, kp=20.0, kd=5.0, max_torque=5.47, joint_name="right_shoulder_pitch_15"),
+    Actuator(actuator_id=22, nn_id=1, kp=20.0, kd=5.0, max_torque=5.47, joint_name="right_shoulder_roll_15"),
+    Actuator(actuator_id=23, nn_id=2, kp=20.0, kd=5.0, max_torque=5.47, joint_name="right_elbow_roll_15"),
+    Actuator(actuator_id=24, nn_id=3, kp=20.0, kd=5.0, max_torque=5.47, joint_name="right_gripper_15"),
+    Actuator(actuator_id=46, nn_id=4, kp=20.0, kd=5.0, max_torque=8.72, joint_name="right_ankle_roll_50"),
     # Left arm (nn_id 5-9)
-    Actuator(actuator_id=11, nn_id=5, kp=120.0, kd=5.0, max_torque=40.0, joint_name="dof_left_shoulder_pitch_03"),
-    Actuator(actuator_id=12, nn_id=6, kp=120.0, kd=5.0, max_torque=40.0, joint_name="dof_left_shoulder_roll_03"),
-    Actuator(actuator_id=13, nn_id=7, kp=50.0, kd=1.0, max_torque=20.0, joint_name="dof_left_shoulder_yaw_02"),
-    Actuator(actuator_id=14, nn_id=8, kp=50.0, kd=1.0, max_torque=20.0, joint_name="dof_left_elbow_02"),
-    Actuator(actuator_id=15, nn_id=9, kp=50.0, kd=1.0, max_torque=20.0, joint_name="dof_left_wrist_00"),
+    Actuator(actuator_id=11, nn_id=5, kp=20.0, kd=5.0, max_torque=5.47, joint_name="left_shoulder_pitch_15"),
+    Actuator(actuator_id=12, nn_id=6, kp=20.0, kd=5.0, max_torque=5.47, joint_name="left_shoulder_roll_15"),
+    Actuator(actuator_id=13, nn_id=7, kp=20.0, kd=5.0, max_torque=5.47, joint_name="left_elbow_roll_15"),
+    Actuator(actuator_id=14, nn_id=8, kp=20.0, kd=5.0, max_torque=5.47, joint_name="left_gripper_15"),
+    Actuator(actuator_id=36, nn_id=9, kp=20.0, kd=5.0, max_torque=8.72, joint_name="left_ankle_roll_50"),
     # Right leg (nn_id 10-14)
-    Actuator(actuator_id=41, nn_id=10, kp=150.0, kd=10.0, max_torque=80.0, joint_name="dof_right_hip_pitch_04"),
-    Actuator(actuator_id=42, nn_id=11, kp=120.0, kd=5.0, max_torque=40.0, joint_name="dof_right_hip_roll_03"),
-    Actuator(actuator_id=43, nn_id=12, kp=120.0, kd=5.0, max_torque=40.0, joint_name="dof_right_hip_yaw_03"),
-    Actuator(actuator_id=44, nn_id=13, kp=150.0, kd=10.0, max_torque=80.0, joint_name="dof_right_knee_04"),
-    Actuator(actuator_id=45, nn_id=14, kp=50.0, kd=1.0, max_torque=20.0, joint_name="dof_right_ankle_02"),
+    Actuator(actuator_id=43, nn_id=10, kp=20.0, kd=5.0, max_torque=8.72, joint_name="right_hip_pitch_50"),
+    Actuator(actuator_id=42, nn_id=11, kp=20.0, kd=5.0, max_torque=8.72, joint_name="right_hip_roll_50"),
+    Actuator(actuator_id=41, nn_id=12, kp=20.0, kd=5.0, max_torque=8.72, joint_name="right_hip_yaw_50"),
+    Actuator(actuator_id=44, nn_id=13, kp=40.0, kd=5.0, max_torque=8.72, joint_name="right_knee_pitch_50"),
+    Actuator(actuator_id=45, nn_id=14, kp=20.0, kd=5.0, max_torque=8.72, joint_name="right_ankle_pitch_50"),
     # Left leg (nn_id 15-19)
-    Actuator(actuator_id=31, nn_id=15, kp=150.0, kd=10.0, max_torque=80.0, joint_name="dof_left_hip_pitch_04"),
-    Actuator(actuator_id=32, nn_id=16, kp=120.0, kd=5.0, max_torque=40.0, joint_name="dof_left_hip_roll_03"),
-    Actuator(actuator_id=33, nn_id=17, kp=120.0, kd=5.0, max_torque=40.0, joint_name="dof_left_hip_yaw_03"),
-    Actuator(actuator_id=34, nn_id=18, kp=150.0, kd=10.0, max_torque=80.0, joint_name="dof_left_knee_04"),
-    Actuator(actuator_id=35, nn_id=19, kp=50.0, kd=1.0, max_torque=20.0, joint_name="dof_left_ankle_02"),
+    Actuator(actuator_id=33, nn_id=15, kp=20.0, kd=5.0, max_torque=8.72, joint_name="left_hip_pitch_50"),
+    Actuator(actuator_id=32, nn_id=16, kp=20.0, kd=5.0, max_torque=8.72, joint_name="left_hip_roll_50"),
+    Actuator(actuator_id=31, nn_id=17, kp=20.0, kd=5.0, max_torque=8.72, joint_name="left_hip_yaw_50"),
+    Actuator(actuator_id=34, nn_id=18, kp=40.0, kd=5.0, max_torque=8.72, joint_name="left_knee_pitch_50"),
+    Actuator(actuator_id=35, nn_id=19, kp=20.0, kd=5.0, max_torque=8.72, joint_name="left_ankle_pitch_50"),
 ]
 
 
@@ -73,18 +73,18 @@ async def get_observation(kos: pykos.KOS) -> np.ndarray:
     )
     imu_obs = np.array([imu.accel_x, imu.accel_y, imu.accel_z, imu.gyro_x, imu.gyro_y, imu.gyro_z])
     cmd = np.array([0.0, 0.0])
-    observation = np.concatenate([pos_obs, vel_obs, imu_obs, cmd], axis=-1)
+    last_action = np.zeros(len(ACTUATOR_LIST))  # Add last action to observation
+    observation = np.concatenate([pos_obs, vel_obs, imu_obs, cmd, last_action], axis=-1)
     return observation
 
 
-async def send_actions(kos: pykos.KOS, position: np.ndarray, velocity: np.ndarray) -> None:
+async def send_actions(kos: pykos.KOS, position: np.ndarray) -> None:
     position = np.rad2deg(position)
-    velocity = np.rad2deg(velocity)
     actuator_commands: list[pykos.services.actuator.ActuatorCommand] = [
         {
             "actuator_id": ac.actuator_id,
             "position": position[ac.nn_id],
-            "velocity": velocity[ac.nn_id],
+            "velocity": 0.0,  # Set velocity to 0 since we're only using position control
         }
         for ac in ACTUATOR_LIST
     ]
@@ -116,9 +116,9 @@ async def reset(kos: pykos.KOS) -> None:
 
 
 def spawn_kos_sim(no_render: bool) -> tuple[subprocess.Popen, Callable]:
-    """Spawn the KOS-Sim KBot2 process and return the process object."""
-    logger.info("Starting KOS-Sim kbot2-feet...")
-    args = ["kos-sim", "kbot2-feet"]
+    """Spawn the KOS-Sim ZBot process and return the process object."""
+    logger.info("Starting KOS-Sim zbot-6dof-feet...")
+    args = ["kos-sim", "zbot-6dof-feet"]
     if no_render:
         args.append("--no-render")
     process = subprocess.Popen(
@@ -189,20 +189,20 @@ async def main(model_path: str, ip: str, no_render: bool, episode_length: int) -
 
     target_time = time.time() + DT
     observation = await get_observation(kos)
+    last_action = np.zeros(len(ACTUATOR_LIST))
 
     end_time = time.time() + episode_length
 
     try:
         while time.time() < end_time:
             observation = observation.reshape(1, -1)
-            # move it all to the infer call
-            action = np.array(model.infer(observation)).reshape(-1)
-            position = action[: len(ACTUATOR_LIST)]
-            velocity = action[len(ACTUATOR_LIST) :]
+            # Model only outputs position commands
+            position = np.array(model.infer(observation)).reshape(-1)
             observation, _ = await asyncio.gather(
                 get_observation(kos),
-                send_actions(kos, position, velocity),
+                send_actions(kos, position),
             )
+            last_action = position  # Store last action for next observation
 
             if time.time() < target_time:
                 await asyncio.sleep(max(0, target_time - time.time()))
@@ -243,7 +243,8 @@ if __name__ == "__main__":
     parser.add_argument("--log-file", type=str, help="Path to write log output")
     args = parser.parse_args()
 
-    log_level: logging._Level = logging.DEBUG if args.debug else logging.INFO
+    # log_level: logging._Level = logging.DEBUG if args.debug else logging.INFO
+    log_level: int = logging.DEBUG
     log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
     if args.log_file:
