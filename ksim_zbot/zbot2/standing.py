@@ -516,7 +516,6 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
             if key not in sts3250_params:
                 raise ValueError(f"Missing required key '{key}' in sts3250 parameters.")
 
-
         # Apply servo-specific parameters based on joint name suffix
         for i in range(mj_model.njnt):
             joint_name = mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_JOINT, i)
@@ -574,18 +573,19 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
         params_file_3250 = params_path / "sts3250_params.json"
 
         if not params_file_3215.exists():
-            raise ValueError(f"Feetech parameters file '{params_file_3215}' not found. "
-                            f"Please ensure it exists in '{params_path}'.")
+            raise ValueError(
+                f"Feetech parameters file '{params_file_3215}' not found. Please ensure it exists in '{params_path}'."
+            )
         if not params_file_3250.exists():
-            raise ValueError(f"Feetech parameters file '{params_file_3250}' not found. "
-                            f"Please ensure it exists in '{params_path}'.")
+            raise ValueError(
+                f"Feetech parameters file '{params_file_3250}' not found. Please ensure it exists in '{params_path}'."
+            )
 
         with open(params_file_3215, "r") as f:
             params_3215: FeetechParams = json.load(f)
         with open(params_file_3250, "r") as f:
             params_3250: FeetechParams = json.load(f)
         return params_3215, params_3250
-
 
     def get_actuators(
         self,
