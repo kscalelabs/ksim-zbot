@@ -608,23 +608,25 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
                 if key not in sts3250_params:
                     raise ValueError(f"Missing required key '{key}' in sts3250 parameters.")
 
+            if not isinstance(sts3215_params["error_gain_data"], list):
+                raise ValueError("sts3215_params['error_gain_data'] must be a list.")
+            if not isinstance(sts3250_params["error_gain_data"], list):
+                raise ValueError("sts3250_params['error_gain_data'] must be a list.")
+
             # Build a list of error_gain_data (one entry per joint)
-            error_gain_data_list = []
+            error_gain_data_list: List[List[Dict[str, float]]] = []
 
             for i, joint_name in enumerate(joint_names):
                 joint_meta = metadata[joint_name]
                 if "_15" in joint_name:
                     max_torque_arr = max_torque_arr.at[i].set(sts3215_params["max_torque"])
-                    error_gain_data_list.append(sts3215_params.get("error_gain_data"))
+                    error_gain_data_list.append(sts3215_params["error_gain_data"])
                 elif "_50" in joint_name:
                     max_torque_arr = max_torque_arr.at[i].set(sts3250_params["max_torque"])
-                    error_gain_data_list.append(sts3250_params.get("error_gain_data"))
+                    error_gain_data_list.append(sts3250_params["error_gain_data"])
                 else:
-                    # For joints without a specific suffix, assign default values.
-                    # We should exit here if we don't have a valid joint name.
                     raise ValueError(f"Invalid joint name: {joint_name}")
 
-                # Set kp/kd from metadata (converted from string)
                 try:
                     kp_val = float(joint_meta.kp) if joint_meta.kp is not None else 0.0
                     kd_val = float(joint_meta.kd) if joint_meta.kd is not None else 0.0
