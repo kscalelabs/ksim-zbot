@@ -4,7 +4,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Generic, List, TypedDict, TypeVar
+from typing import Callable, Dict, Generic, List, Optional, TypedDict, TypeVar
 
 import attrs
 import distrax
@@ -73,7 +73,7 @@ class FeetechActuators(Actuators):
         max_torque: Array,
         kp: Array,
         kd: Array,
-        error_gain_data: list | None = None,  # list of dicts with keys "pos_err" and "error_gain"
+        error_gain_data: Optional[List[List[Dict[str, float]]]] = None,
         action_noise: float = 0.0,
         action_noise_type: NoiseType = "none",
         torque_noise: float = 0.0,
