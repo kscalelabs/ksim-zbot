@@ -83,21 +83,26 @@ class FeetechActuators(Actuators):
         self.kp = kp  # Array of shape (NUM_OUTPUTS,)
         self.kd = kd  # Array of shape (NUM_OUTPUTS,)
 
-        spline_knots: list[Array] = []
-        spline_coeffs: list[Array] = []
-        for ed in error_gain_data:
-            if ed is not None:
-                x_vals = [d["pos_err"] for d in ed]
-                y_vals = [d["error_gain"] for d in ed]
-                cs = CubicSpline(x_vals, y_vals, extrapolate=True)
-                spline_knots.append(jnp.array(cs.x))
-                spline_coeffs.append(jnp.array(cs.c))
-            else:
-                spline_knots.append(jnp.array([]))  # Use empty array instead of None
-                spline_coeffs.append(jnp.array([]))
-        self.spline_knots = spline_knots
-        self.spline_coeffs = spline_coeffs
-        self.error_gain = jnp.array([])  # Assign an empty Array when splines are active.
+        if error_gain_data is not None:
+            spline_knots: list[Array] = []
+            spline_coeffs: list[Array] = []
+            for ed in error_gain_data:
+                if ed is not None:
+                    x_vals = [d["pos_err"] for d in ed]
+                    y_vals = [d["error_gain"] for d in ed]
+                    cs = CubicSpline(x_vals, y_vals, extrapolate=True)
+                    spline_knots.append(jnp.array(cs.x))
+                    spline_coeffs.append(jnp.array(cs.c))
+                else:
+                    spline_knots.append(jnp.array([]))  # Use empty array instead of None
+                    spline_coeffs.append(jnp.array([]))
+            self.spline_knots = spline_knots
+            self.spline_coeffs = spline_coeffs
+            self.error_gain = jnp.array([])  # Assign an empty Array when splines are active.
+        else:  # I don't like this, need to fix
+            self.spline_knots = []
+            self.spline_coeffs = []
+            self.error_gain = 0
 
         self.action_noise = action_noise
         self.action_noise_type = action_noise_type
