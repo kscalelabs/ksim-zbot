@@ -4,7 +4,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Generic, List, Optional, TypedDict, TypeVar
+from typing import Callable, Generic, List, Optional, TypedDict, TypeVar
 
 import attrs
 import distrax
@@ -53,6 +53,9 @@ class HistoryObservation(ksim.Observation):
         return state.carry
 
 
+ErrorGainData = List[dict[str, float]]
+
+
 class FeetechParams(TypedDict):
     sysid: str
     max_torque: float
@@ -62,7 +65,7 @@ class FeetechParams(TypedDict):
     vin: float
     kt: float
     R: float
-    error_gain_data: List[dict[str, float]]
+    error_gain_data: ErrorGainData
 
 
 class FeetechActuators(Actuators):
@@ -73,7 +76,7 @@ class FeetechActuators(Actuators):
         max_torque: Array,
         kp: Array,
         kd: Array,
-        error_gain_data: Optional[List[List[Dict[str, float]]]] = None,
+        error_gain_data: Optional[List[ErrorGainData]] = None,
         action_noise: float = 0.0,
         action_noise_type: NoiseType = "none",
         torque_noise: float = 0.0,
@@ -619,7 +622,7 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
                 raise ValueError("sts3250_params['error_gain_data'] must be a list.")
 
             # Build a list of error_gain_data (one entry per joint)
-            error_gain_data_list: List[List[Dict[str, float]]] = []
+            error_gain_data_list: List[ErrorGainData] = []
 
             for i, joint_name in enumerate(joint_names):
                 joint_meta = metadata[joint_name]
