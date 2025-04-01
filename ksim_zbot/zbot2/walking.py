@@ -1,9 +1,10 @@
 """Defines simple task for training a walking policy for Z-Bot."""
 
 import asyncio
+import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Generic, TypeVar, Callable
+from typing import Callable, Generic, TypeVar
 
 import attrs
 import distrax
@@ -21,7 +22,14 @@ from mujoco_scenes.mjcf import load_mjmodel
 from xax.nn.export import export
 from xax.utils.types.frozen_dict import FrozenDict
 
-from .standing import DHControlPenalty, DHHealthyReward, HistoryObservation, LastActionObservation, FeetechActuators
+from .standing import (
+    DHControlPenalty,
+    DHHealthyReward,
+    FeetechActuators,
+    FeetechParams,
+    HistoryObservation,
+    LastActionObservation,
+)
 
 # Constants for history handling
 HISTORY_LENGTH = 0
@@ -36,7 +44,7 @@ SINGLE_STEP_HISTORY_SIZE = 0
 # imu_acc_3: 3
 # imu_gyro_3: 3
 # last_action_n: 20
-OBS_SIZE = 20 + 20 + 3 + 3 + 20 # = 66
+OBS_SIZE = 20 + 20 + 3 + 3 + 20  # = 66
 # Command size:
 # lin_vel_cmd_2: 2
 CMD_SIZE = 2
@@ -46,41 +54,18 @@ NUM_INPUTS = OBS_SIZE + CMD_SIZE + (SINGLE_STEP_HISTORY_SIZE * HISTORY_LENGTH)
 # NUM_INPUTS = 66 + 2 + (0 * 0) = 68
 NUM_OUTPUTS = 20
 
-# Feetech parameters from Scott's modelling
-FT_STS3215_PARAMS: dict[str, float | str] = {
-    "sysid": "sts3215-12v-id009",  # Traceable ID @ github.com/kscalelabs/sysid
-    "max_torque": 5.466091040935576,
-    "armature": 0.039999999991812,
-    "frictionloss": 0.11434146818509992,
-    "damping": 1.2305092028680242,
-    "vin": 12.1,
-    "kt": 1.0000000244338463,
-    "R": 2.2136477795617733,
-    "error_gain": 0.164787755,
-}
-
-FT_STS3250_PARAMS: dict[str, float | str] = {
-    "sysid": "sts3250-id008",  # Traceable ID @ github.com/kscalelabs/sysid
-    "max_torque": 8.716130441407099,
-    "armature": 0.03999977737144798,
-    "damping": 1.3464038511725651,
-    "frictionloss": 0.19999504581400715,
-    "vin": 12.1,
-    "kt": 1.0005874626213263,
-    "R": 1.3890462492623645,
-    "error_gain": 0.163249681,
-}
-
 
 @jax.tree_util.register_dataclass
 @dataclass(frozen=True)
 class AuxOutputs:
     log_probs: Array
     values: Array
-    
+
+
 class NaiveVelocityReward(ksim.Reward):
     def __call__(self, trajectory: ksim.Trajectory) -> Array:
         return trajectory.qvel[..., 0].clip(max=5.0)
+
 
 @attrs.define(frozen=True, kw_only=True)
 class JointDeviationPenalty(ksim.Reward):
@@ -282,6 +267,11 @@ class ZbotWalkingTaskConfig(ksim.PPOConfig):
         help="The path to the assets directory for the robot.",
     )
 
+    actuator_params_path: str = xax.field(
+        value="ksim_zbot/kscale-assets/actuators/feetech/",
+        help="The path to the assets directory for feetech actuator models",
+    )
+
     action_scale: float = xax.field(
         value=1.0,
         help="The scale to apply to the actions.",
@@ -336,7 +326,8 @@ class ZbotWalkingTaskConfig(ksim.PPOConfig):
     )
 
 
-Config = TypeVar('Config', bound=ZbotWalkingTaskConfig)
+Config = TypeVar("Config", bound=ZbotWalkingTaskConfig)
+
 
 class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig], Generic[Config]):
     def get_optimizer(self) -> optax.GradientTransformation:
@@ -368,6 +359,15 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig], Generic[Config]):
         mj_model.opt.disableflags = mjx.DisableBit.EULERDAMP
         mj_model.opt.solver = mjx.SolverType.CG
 
+        sts3215_params, sts3250_params = self._load_feetech_params()
+
+        required_keys = ["damping", "armature", "frictionloss", "max_torque"]
+        for key in required_keys:
+            if key not in sts3215_params:
+                raise ValueError(f"Missing required key '{key}' in sts3215 parameters.")
+            if key not in sts3250_params:
+                raise ValueError(f"Missing required key '{key}' in sts3250 parameters.")
+
         # Apply servo-specific parameters based on joint name suffix
         for i in range(mj_model.njnt):
             joint_name = mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_JOINT, i)
@@ -378,9 +378,9 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig], Generic[Config]):
 
             # Apply parameters based on the joint suffix
             if "_15" in joint_name:  # STS3215 servos (arms)
-                mj_model.dof_damping[dof_id] = FT_STS3215_PARAMS["damping"]
-                mj_model.dof_armature[dof_id] = FT_STS3215_PARAMS["armature"]
-                mj_model.dof_frictionloss[dof_id] = FT_STS3215_PARAMS["frictionloss"]
+                mj_model.dof_damping[dof_id] = sts3215_params["damping"]
+                mj_model.dof_armature[dof_id] = sts3215_params["armature"]
+                mj_model.dof_frictionloss[dof_id] = sts3215_params["frictionloss"]
 
                 # Get base name for actuator (remove the _15 suffix)
                 base_name = joint_name.rsplit("_", 1)[0]
@@ -388,16 +388,16 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig], Generic[Config]):
 
                 actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
                 if actuator_id >= 0:
-                    max_torque = float(FT_STS3215_PARAMS["max_torque"])
+                    max_torque = float(sts3215_params["max_torque"])
                     mj_model.actuator_forcerange[actuator_id, :] = [
                         -max_torque,
                         max_torque,
                     ]
 
             elif "_50" in joint_name:  # STS3250 servos (legs)
-                mj_model.dof_damping[dof_id] = FT_STS3250_PARAMS["damping"]
-                mj_model.dof_armature[dof_id] = FT_STS3250_PARAMS["armature"]
-                mj_model.dof_frictionloss[dof_id] = FT_STS3250_PARAMS["frictionloss"]
+                mj_model.dof_damping[dof_id] = sts3250_params["damping"]
+                mj_model.dof_armature[dof_id] = sts3250_params["armature"]
+                mj_model.dof_frictionloss[dof_id] = sts3250_params["frictionloss"]
 
                 # Get base name for actuator (remove the _50 suffix)
                 base_name = joint_name.rsplit("_", 1)[0]
@@ -405,7 +405,7 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig], Generic[Config]):
 
                 actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
                 if actuator_id >= 0:
-                    max_torque = float(FT_STS3250_PARAMS["max_torque"])
+                    max_torque = float(sts3250_params["max_torque"])
                     mj_model.actuator_forcerange[actuator_id, :] = [
                         -max_torque,
                         max_torque,
@@ -421,6 +421,26 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig], Generic[Config]):
 
         return metadata.joint_name_to_metadata
 
+    def _load_feetech_params(self) -> tuple[FeetechParams, FeetechParams]:
+        params_path = Path(self.config.actuator_params_path)
+        params_file_3215 = params_path / "sts3215_12v_params.json"
+        params_file_3250 = params_path / "sts3250_params.json"
+
+        if not params_file_3215.exists():
+            raise ValueError(
+                f"Feetech parameters file '{params_file_3215}' not found. Please ensure it exists in '{params_path}'."
+            )
+        if not params_file_3250.exists():
+            raise ValueError(
+                f"Feetech parameters file '{params_file_3250}' not found. Please ensure it exists in '{params_path}'."
+            )
+
+        with open(params_file_3215, "r") as f:
+            params_3215: FeetechParams = json.load(f)
+        with open(params_file_3250, "r") as f:
+            params_3250: FeetechParams = json.load(f)
+        return params_3215, params_3250
+
     def get_actuators(
         self,
         physics_model: ksim.PhysicsModel,
@@ -429,35 +449,53 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig], Generic[Config]):
         if metadata is not None:
             joint_names = sorted(metadata.keys())
 
-        num_joints = len(joint_names)
-        max_torque_arr = jnp.zeros(num_joints)
-        error_gain_arr = jnp.zeros(num_joints)
-        kp_arr = jnp.zeros(num_joints)
-        kd_arr = jnp.zeros(num_joints)
+            num_joints = len(joint_names)
+            max_torque_arr = jnp.zeros(num_joints)
+            kp_arr = jnp.zeros(num_joints)
+            kd_arr = jnp.zeros(num_joints)
 
-        for i, joint_name in enumerate(joint_names):
-            if "_15" in joint_name:
-                max_torque_arr = max_torque_arr.at[i].set(FT_STS3215_PARAMS["max_torque"])
-                error_gain_arr = error_gain_arr.at[i].set(FT_STS3215_PARAMS["error_gain"])
-                # Temporary: set constant kp/kd for STS3215 joints (arms)
-                kp_arr = kp_arr.at[i].set(20.0)
-                kd_arr = kd_arr.at[i].set(10.0)
-            elif "_50" in joint_name:
-                max_torque_arr = max_torque_arr.at[i].set(FT_STS3250_PARAMS["max_torque"])
-                error_gain_arr = error_gain_arr.at[i].set(FT_STS3250_PARAMS["error_gain"])
-                # Temporary: set constant kp/kd for STS3250 joints (legs)
-                kp_arr = kp_arr.at[i].set(100.0)
-                kd_arr = kd_arr.at[i].set(10.0)
-            else:
-                # For joints without a specific suffix, assign default values.
-                # We should exit here if we don't have a valid joint name.
-                raise ValueError(f"Invalid joint name: {joint_name}")
+            sts3215_params, sts3250_params = self._load_feetech_params()
+            required_keys = ["max_torque", "error_gain_data"]
+            for key in required_keys:
+                if key not in sts3215_params:
+                    raise ValueError(f"Missing required key '{key}' in sts3215 parameters.")
+                if key not in sts3250_params:
+                    raise ValueError(f"Missing required key '{key}' in sts3250 parameters.")
 
+            if not isinstance(sts3215_params["error_gain_data"], list):
+                raise ValueError("sts3215_params['error_gain_data'] must be a list.")
+            if not isinstance(sts3250_params["error_gain_data"], list):
+                raise ValueError("sts3250_params['error_gain_data'] must be a list.")
+
+            # Build a list of error_gain_data (one entry per joint)
+            error_gain_data_list: List[ErrorGainData] = []
+
+            for i, joint_name in enumerate(joint_names):
+                joint_meta = metadata[joint_name]
+                if "_15" in joint_name:
+                    max_torque_arr = max_torque_arr.at[i].set(sts3215_params["max_torque"])
+                    error_gain_data_list.append(sts3215_params["error_gain_data"])
+                elif "_50" in joint_name:
+                    max_torque_arr = max_torque_arr.at[i].set(sts3250_params["max_torque"])
+                    error_gain_data_list.append(sts3250_params["error_gain_data"])
+                else:
+                    raise ValueError(f"Invalid joint name: {joint_name}")
+
+                try:
+                    kp_val = float(joint_meta.kp) if joint_meta.kp is not None else 0.0
+                    kd_val = float(joint_meta.kd) if joint_meta.kd is not None else 0.0
+                except ValueError as e:
+                    raise ValueError(f"Could not convert kp/kd gains to a float for joint {joint_name}: {e}")
+
+                kp_arr = kp_arr.at[i].set(kp_val)
+                kd_arr = kd_arr.at[i].set(kd_val)
+        else:
+            raise ValueError("Metadata is not available")
         return FeetechActuators(
             max_torque=max_torque_arr,
             kp=kp_arr,
             kd=kd_arr,
-            error_gain=error_gain_arr,
+            error_gain_data=error_gain_data_list,
             action_noise=0.0,
             action_noise_type="none",
             torque_noise=0.0,
@@ -545,8 +583,9 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig], Generic[Config]):
     ) -> distrax.Normal:
         # Debugging: print available observation keys and shapes
         import logging
-        logging.info(f"Available observation keys: {list(observations.keys())}")
-        
+
+        # logging.info(f"Available observation keys: {list(observations.keys())}")
+
         joint_pos_n = observations["dhjoint_position_observation"]
         joint_vel_n = observations["dhjoint_velocity_observation"]
         imu_acc_3 = observations["imu_acc_obs"]
@@ -554,24 +593,22 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig], Generic[Config]):
         lin_vel_cmd_2 = commands["linear_velocity_step_command"]
         last_action_n = observations["last_action_observation"]
         history_n = observations["history_observation"]
-        
+
         # Log shapes for debugging
-        logging.info(f"joint_pos_n shape: {joint_pos_n.shape}")
-        logging.info(f"joint_vel_n shape: {joint_vel_n.shape}")
-        logging.info(f"imu_acc_3 shape: {imu_acc_3.shape}")
-        logging.info(f"imu_gyro_3 shape: {imu_gyro_3.shape}")
-        logging.info(f"lin_vel_cmd_2 shape: {lin_vel_cmd_2.shape}")
-        logging.info(f"last_action_n shape: {last_action_n.shape}")
-        logging.info(f"history_n shape: {history_n.shape}")
-        
+        # logging.info(f"joint_pos_n shape: {joint_pos_n.shape}")
+        # logging.info(f"joint_vel_n shape: {joint_vel_n.shape}")
+        # logging.info(f"imu_acc_3 shape: {imu_acc_3.shape}")
+        # logging.info(f"imu_gyro_3 shape: {imu_gyro_3.shape}")
+        # logging.info(f"lin_vel_cmd_2 shape: {lin_vel_cmd_2.shape}")
+        # logging.info(f"last_action_n shape: {last_action_n.shape}")
+        # logging.info(f"history_n shape: {history_n.shape}")
+
         x_n = jnp.concatenate(
             [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], axis=-1
         )
         logging.info(f"Concatenated input shape: {x_n.shape}")
-        
-        return model.actor(
-            joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n
-        )
+
+        return model.actor(joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n)
 
     def _run_critic(
         self,
@@ -586,9 +623,7 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig], Generic[Config]):
         lin_vel_cmd_2 = commands["linear_velocity_step_command"]
         last_action_n = observations["last_action_observation"]
         history_n = observations["history_observation"]
-        return model.critic(
-            joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n
-        )
+        return model.critic(joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n)
 
     def get_on_policy_log_probs(
         self,
@@ -665,7 +700,7 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig], Generic[Config]):
             imu_gyro_3 = observations["imu_gyro_obs"]
             lin_vel_cmd_2 = commands["linear_velocity_step_command"]
             last_action_n = observations["last_action_observation"]
-            
+
             history_n = jnp.concatenate(
                 [
                     joint_pos_n,
@@ -678,7 +713,7 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig], Generic[Config]):
                 ],
                 axis=-1,
             )
-            
+
             # Roll the history by shifting the existing history and adding the new data
             carry_reshaped = carry.reshape(HISTORY_LENGTH, SINGLE_STEP_HISTORY_SIZE)
             shifted_history = jnp.roll(carry_reshaped, shift=-1, axis=0)
