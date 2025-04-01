@@ -263,8 +263,8 @@ class DHControlPenalty(ksim.Reward):
 class DHHealthyReward(ksim.Reward):
     """Legacy default humanoid healthy reward that gives binary reward based on height."""
 
-    healthy_z_lower: float = attrs.field(default=0.5)
-    healthy_z_upper: float = attrs.field(default=1.5)
+    healthy_z_lower: float = attrs.field(default=0.25)
+    healthy_z_upper: float = attrs.field(default=0.6)
 
     def __call__(self, trajectory: ksim.Trajectory) -> Array:
         height = trajectory.qpos[..., 2]
