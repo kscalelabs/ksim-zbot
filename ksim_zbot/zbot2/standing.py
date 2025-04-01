@@ -480,7 +480,7 @@ class ZbotStandingTaskConfig(ksim.PPOConfig):
 
     # Checkpointing parameters.
     export_for_inference: bool = xax.field(
-        value=False,
+        value=True,
         help="Whether to export the model for inference.",
     )
 
