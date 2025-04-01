@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Generic, TypeVar, Callable
 
 import attrs
 import distrax
@@ -20,12 +21,55 @@ from mujoco_scenes.mjcf import load_mjmodel
 from xax.nn.export import export
 from xax.utils.types.frozen_dict import FrozenDict
 
-from .standing import DHControlPenalty, DHHealthyReward, HistoryObservation, LastActionObservation
+from .standing import DHControlPenalty, DHHealthyReward, HistoryObservation, LastActionObservation, FeetechActuators
 
-OBS_SIZE = 401
+# Constants for history handling
+HISTORY_LENGTH = 0
+SINGLE_STEP_HISTORY_SIZE = 0
+
+# Update observation size to match expected model input dimensions
+# Previous calculation: 20 joints pos + 20 joints vel + 6 IMU + 2 cmd + 20 last action
+# The actual observation might have different sizes based on the logs
+# Intended observation components:
+# joint_pos_n: 20
+# joint_vel_n: 20 (after fixing DHJointVelocityObservation)
+# imu_acc_3: 3
+# imu_gyro_3: 3
+# last_action_n: 20
+OBS_SIZE = 20 + 20 + 3 + 3 + 20 # = 66
+# Command size:
+# lin_vel_cmd_2: 2
 CMD_SIZE = 2
 NUM_INPUTS = OBS_SIZE + CMD_SIZE
-NUM_OUTPUTS = 18
+# Final Input Size:
+NUM_INPUTS = OBS_SIZE + CMD_SIZE + (SINGLE_STEP_HISTORY_SIZE * HISTORY_LENGTH)
+# NUM_INPUTS = 66 + 2 + (0 * 0) = 68
+NUM_OUTPUTS = 20
+
+# Feetech parameters from Scott's modelling
+FT_STS3215_PARAMS: dict[str, float | str] = {
+    "sysid": "sts3215-12v-id009",  # Traceable ID @ github.com/kscalelabs/sysid
+    "max_torque": 5.466091040935576,
+    "armature": 0.039999999991812,
+    "frictionloss": 0.11434146818509992,
+    "damping": 1.2305092028680242,
+    "vin": 12.1,
+    "kt": 1.0000000244338463,
+    "R": 2.2136477795617733,
+    "error_gain": 0.164787755,
+}
+
+FT_STS3250_PARAMS: dict[str, float | str] = {
+    "sysid": "sts3250-id008",  # Traceable ID @ github.com/kscalelabs/sysid
+    "max_torque": 8.716130441407099,
+    "armature": 0.03999977737144798,
+    "damping": 1.3464038511725651,
+    "frictionloss": 0.19999504581400715,
+    "vin": 12.1,
+    "kt": 1.0005874626213263,
+    "R": 1.3890462492623645,
+    "error_gain": 0.163249681,
+}
 
 
 @jax.tree_util.register_dataclass
@@ -33,7 +77,10 @@ NUM_OUTPUTS = 18
 class AuxOutputs:
     log_probs: Array
     values: Array
-
+    
+class NaiveVelocityReward(ksim.Reward):
+    def __call__(self, trajectory: ksim.Trajectory) -> Array:
+        return trajectory.qvel[..., 0].clip(max=5.0)
 
 @attrs.define(frozen=True, kw_only=True)
 class JointDeviationPenalty(ksim.Reward):
@@ -72,7 +119,7 @@ class DHJointVelocityObservation(ksim.Observation):
     noise: float = attrs.field(default=0.0)
 
     def observe(self, rollout_state: ksim.RolloutVariables, rng: PRNGKeyArray) -> Array:
-        qvel = rollout_state.physics_state.data.qvel  # (N,)
+        qvel = rollout_state.physics_state.data.qvel[6:]  # (N,)
         return qvel
 
     def add_noise(self, observation: Array, rng: PRNGKeyArray) -> Array:
@@ -84,7 +131,7 @@ class DHJointPositionObservation(ksim.Observation):
     noise: float = attrs.field(default=0.0)
 
     def observe(self, rollout_state: ksim.RolloutVariables, rng: PRNGKeyArray) -> Array:
-        qpos = rollout_state.physics_state.data.qpos[2:]  # (N,)
+        qpos = rollout_state.physics_state.data.qpos[7:]  # (N,)
         return qpos
 
     def add_noise(self, observation: Array, rng: PRNGKeyArray) -> Array:
@@ -104,7 +151,7 @@ class DHForwardReward(ksim.Reward):
         return x_delta
 
 
-class KbotActor(eqx.Module):
+class ZbotActor(eqx.Module):
     """Actor for the walking task."""
 
     mlp: eqx.nn.MLP
@@ -137,15 +184,16 @@ class KbotActor(eqx.Module):
 
     def __call__(
         self,
-        dh_joint_pos_n: Array,
-        dh_joint_vel_n: Array,
-        com_inertia_n: Array,
-        com_vel_n: Array,
-        act_frc_obs_n: Array,
-        lin_vel_cmd_n: Array,
+        joint_pos_n: Array,
+        joint_vel_n: Array,
+        imu_acc_3: Array,
+        imu_gyro_3: Array,
+        lin_vel_cmd_2: Array,
+        last_action_n: Array,
+        history_n: Array,
     ) -> distrax.Normal:
         x_n = jnp.concatenate(
-            [dh_joint_pos_n, dh_joint_vel_n, com_inertia_n, com_vel_n, act_frc_obs_n, lin_vel_cmd_n], axis=-1
+            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], axis=-1
         )  # (NUM_INPUTS)
 
         # Split the output into mean and standard deviation.
@@ -159,13 +207,12 @@ class KbotActor(eqx.Module):
         # Softplus and clip to ensure positive standard deviations.
         std_n = jnp.clip((jax.nn.softplus(std_n) + self.min_std) * self.var_scale, max=self.max_std)
 
-        # return distrax.Transformed(distrax.Normal(mean_n, std_n), distrax.Tanh())
+        # Return position-only distribution
         return distrax.Normal(mean_n, std_n)
 
     def call_flat_obs(
         self,
         flat_obs_n: Array,
-        cmd_n: Array,
     ) -> distrax.Normal:
         prediction_n = self.mlp(flat_obs_n)
         mean_n = prediction_n[..., :NUM_OUTPUTS]
@@ -180,8 +227,8 @@ class KbotActor(eqx.Module):
         return distrax.Normal(mean_n, std_n)
 
 
-class KbotCritic(eqx.Module):
-    """Critic for the standing task."""
+class ZbotCritic(eqx.Module):
+    """Critic for the walking task."""
 
     mlp: eqx.nn.MLP
 
@@ -197,32 +244,33 @@ class KbotCritic(eqx.Module):
 
     def __call__(
         self,
-        dh_joint_pos_n: Array,
-        dh_joint_vel_n: Array,
-        com_inertia_n: Array,
-        com_vel_n: Array,
-        act_frc_obs_n: Array,
-        lin_vel_cmd_n: Array,
+        joint_pos_n: Array,
+        joint_vel_n: Array,
+        imu_acc_3: Array,
+        imu_gyro_3: Array,
+        lin_vel_cmd_2: Array,
+        last_action_n: Array,
+        history_n: Array,
     ) -> Array:
         x_n = jnp.concatenate(
-            [dh_joint_pos_n, dh_joint_vel_n, com_inertia_n, com_vel_n, act_frc_obs_n, lin_vel_cmd_n], axis=-1
+            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], axis=-1
         )  # (NUM_INPUTS)
         return self.mlp(x_n)
 
 
-class KbotModel(eqx.Module):
-    actor: KbotActor
-    critic: KbotCritic
+class ZbotModel(eqx.Module):
+    actor: ZbotActor
+    critic: ZbotCritic
 
     def __init__(self, key: PRNGKeyArray) -> None:
-        self.actor = KbotActor(
+        self.actor = ZbotActor(
             key,
             min_std=0.01,
             max_std=1.0,
             var_scale=1.0,
             mean_scale=1.0,
         )
-        self.critic = KbotCritic(key)
+        self.critic = ZbotCritic(key)
 
 
 @dataclass
@@ -230,7 +278,7 @@ class ZbotWalkingTaskConfig(ksim.PPOConfig):
     """Config for the ZBot walking task."""
 
     robot_urdf_path: str = xax.field(
-        value="ksim_zbot/kscale-assets/zbot-feet/",
+        value="ksim_zbot/kscale-assets/zbot-6dof-feet/",
         help="The path to the assets directory for the robot.",
     )
 
@@ -283,12 +331,14 @@ class ZbotWalkingTaskConfig(ksim.PPOConfig):
 
     # Checkpointing parameters.
     export_for_inference: bool = xax.field(
-        value=False,
+        value=True,
         help="Whether to export the model for inference.",
     )
 
 
-class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig]):
+Config = TypeVar('Config', bound=ZbotWalkingTaskConfig)
+
+class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig], Generic[Config]):
     def get_optimizer(self) -> optax.GradientTransformation:
         """Builds the optimizer.
 
@@ -307,7 +357,9 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig]):
         return optimizer
 
     def get_mujoco_model(self) -> mujoco.MjModel:
+        # mjcf_path = (Path(self.config.robot_urdf_path) / "scene.mjcf").resolve().as_posix()
         mjcf_path = (Path(self.config.robot_urdf_path) / "robot.mjcf").resolve().as_posix()
+        print(f"Loading MJCF model from {mjcf_path}")
         mj_model = load_mjmodel(mjcf_path, scene="smooth")
 
         mj_model.opt.timestep = jnp.array(self.config.dt)
@@ -315,6 +367,49 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig]):
         mj_model.opt.ls_iterations = 6
         mj_model.opt.disableflags = mjx.DisableBit.EULERDAMP
         mj_model.opt.solver = mjx.SolverType.CG
+
+        # Apply servo-specific parameters based on joint name suffix
+        for i in range(mj_model.njnt):
+            joint_name = mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_JOINT, i)
+            if joint_name is None or not any(suffix in joint_name for suffix in ["_15", "_50"]):
+                continue
+
+            dof_id = mj_model.jnt_dofadr[i]
+
+            # Apply parameters based on the joint suffix
+            if "_15" in joint_name:  # STS3215 servos (arms)
+                mj_model.dof_damping[dof_id] = FT_STS3215_PARAMS["damping"]
+                mj_model.dof_armature[dof_id] = FT_STS3215_PARAMS["armature"]
+                mj_model.dof_frictionloss[dof_id] = FT_STS3215_PARAMS["frictionloss"]
+
+                # Get base name for actuator (remove the _15 suffix)
+                base_name = joint_name.rsplit("_", 1)[0]
+                actuator_name = f"{base_name}_15_ctrl"
+
+                actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
+                if actuator_id >= 0:
+                    max_torque = float(FT_STS3215_PARAMS["max_torque"])
+                    mj_model.actuator_forcerange[actuator_id, :] = [
+                        -max_torque,
+                        max_torque,
+                    ]
+
+            elif "_50" in joint_name:  # STS3250 servos (legs)
+                mj_model.dof_damping[dof_id] = FT_STS3250_PARAMS["damping"]
+                mj_model.dof_armature[dof_id] = FT_STS3250_PARAMS["armature"]
+                mj_model.dof_frictionloss[dof_id] = FT_STS3250_PARAMS["frictionloss"]
+
+                # Get base name for actuator (remove the _50 suffix)
+                base_name = joint_name.rsplit("_", 1)[0]
+                actuator_name = f"{base_name}_50_ctrl"
+
+                actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
+                if actuator_id >= 0:
+                    max_torque = float(FT_STS3250_PARAMS["max_torque"])
+                    mj_model.actuator_forcerange[actuator_id, :] = [
+                        -max_torque,
+                        max_torque,
+                    ]
 
         return mj_model
 
@@ -331,19 +426,50 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig]):
         physics_model: ksim.PhysicsModel,
         metadata: dict[str, JointMetadataOutput] | None = None,
     ) -> ksim.Actuators:
-        if self.config.use_mit_actuators:
-            if metadata is None:
-                raise ValueError("Metadata is required for MIT actuators")
-            return ksim.MITPositionActuators(physics_model, metadata)
-        else:
-            return ksim.TorqueActuators()
+        if metadata is not None:
+            joint_names = sorted(metadata.keys())
+
+        num_joints = len(joint_names)
+        max_torque_arr = jnp.zeros(num_joints)
+        error_gain_arr = jnp.zeros(num_joints)
+        kp_arr = jnp.zeros(num_joints)
+        kd_arr = jnp.zeros(num_joints)
+
+        for i, joint_name in enumerate(joint_names):
+            if "_15" in joint_name:
+                max_torque_arr = max_torque_arr.at[i].set(FT_STS3215_PARAMS["max_torque"])
+                error_gain_arr = error_gain_arr.at[i].set(FT_STS3215_PARAMS["error_gain"])
+                # Temporary: set constant kp/kd for STS3215 joints (arms)
+                kp_arr = kp_arr.at[i].set(20.0)
+                kd_arr = kd_arr.at[i].set(10.0)
+            elif "_50" in joint_name:
+                max_torque_arr = max_torque_arr.at[i].set(FT_STS3250_PARAMS["max_torque"])
+                error_gain_arr = error_gain_arr.at[i].set(FT_STS3250_PARAMS["error_gain"])
+                # Temporary: set constant kp/kd for STS3250 joints (legs)
+                kp_arr = kp_arr.at[i].set(100.0)
+                kd_arr = kd_arr.at[i].set(10.0)
+            else:
+                # For joints without a specific suffix, assign default values.
+                # We should exit here if we don't have a valid joint name.
+                raise ValueError(f"Invalid joint name: {joint_name}")
+
+        return FeetechActuators(
+            max_torque=max_torque_arr,
+            kp=kp_arr,
+            kd=kd_arr,
+            error_gain=error_gain_arr,
+            action_noise=0.0,
+            action_noise_type="none",
+            torque_noise=0.0,
+            torque_noise_type="none",
+        )
 
     def get_randomization(self, physics_model: ksim.PhysicsModel) -> list[ksim.Randomization]:
         return [
             ksim.StaticFrictionRandomization(scale_lower=0.5, scale_upper=2.0),
             ksim.JointZeroPositionRandomization(scale_lower=-0.05, scale_upper=0.05),
             ksim.ArmatureRandomization(scale_lower=1.0, scale_upper=1.05),
-            ksim.MassMultiplicationRandomization.from_body_name(physics_model, "Z_BOT2_MASTER_BODY_SKELETON"),
+            ksim.MassMultiplicationRandomization.from_body_name(physics_model, "Top_Brace"),
             ksim.JointDampingRandomization(scale_lower=0.95, scale_upper=1.05),
         ]
 
@@ -357,9 +483,8 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig]):
         return [
             DHJointPositionObservation(),
             DHJointVelocityObservation(),
-            ksim.ActuatorForceObservation(),
-            ksim.CenterOfMassInertiaObservation(),
-            ksim.CenterOfMassVelocityObservation(),
+            ksim.SensorObservation.create(physics_model, "imu_acc", noise=0.5),
+            ksim.SensorObservation.create(physics_model, "imu_gyro", noise=0.2),
             LastActionObservation(noise=0.0),
             HistoryObservation(),
         ]
@@ -380,33 +505,20 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig]):
             ),
         ]
 
-    # from ksim.rewards import AngularVelocityXYPenalty, LinearVelocityZPenalty,TerminationPenalty, JointVelocityPenalty
     def get_rewards(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reward]:
-        # return [
-        #     DHControlPenalty(scale=-0.01),
-        #     HeightReward(scale=5.0, height_target=0.7),
-        #     # ActionSmoothnessPenalty(scale=-0.01),
-        # ]
         return [
             JointDeviationPenalty(scale=-1.0),
             DHControlPenalty(scale=-0.05),
             DHHealthyReward(scale=0.5),
-            # TerminationPenalty(scale=-10.0),
-            # JointVelocityPenalty(scale=-0.05),
-            # These seem necessary to prevent some physics artifacts.
-            # LinearVelocityZPenalty(scale=-0.001),
-            # AngularVelocityXYPenalty(scale=-0.001),
-            # DHForwardReward(scale=0.25),
             DHControlPenalty(scale=-0.01),
-            # HeightReward(scale=.5, height_target=0.7),
+            # LinearVelocityTrackingReward(scale=1.0),
+            NaiveVelocityReward(scale=1.0),
         ]
 
     def get_terminations(self, physics_model: ksim.PhysicsModel) -> list[ksim.Termination]:
         return [
-            # BadZTermination(unhealthy_z_lower=0.4, unhealthy_z_upper=3.0),
             ksim.RollTooGreatTermination(max_roll=1.04),
             ksim.PitchTooGreatTermination(max_pitch=1.04),
-            # FastAccelerationTermination(),
         ]
 
     def get_events(self, physics_model: ksim.PhysicsModel) -> list[ksim.Event]:
@@ -419,45 +531,68 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig]):
             ),
         ]
 
-    def get_model(self, key: PRNGKeyArray) -> KbotModel:
-        return KbotModel(key)
+    def get_model(self, key: PRNGKeyArray) -> ZbotModel:
+        return ZbotModel(key)
 
     def get_initial_carry(self, rng: PRNGKeyArray) -> Array:
-        from .standing import HISTORY_LENGTH, SINGLE_STEP_HISTORY_SIZE
-
         return jnp.zeros(HISTORY_LENGTH * SINGLE_STEP_HISTORY_SIZE)
 
     def _run_actor(
         self,
-        model: KbotModel,
+        model: ZbotModel,
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
     ) -> distrax.Normal:
-        dh_joint_pos_n = observations["dhjoint_position_observation"]
-        dh_joint_vel_n = observations["dhjoint_velocity_observation"]
-        com_inertia_n = observations["center_of_mass_inertia_observation"]
-        com_vel_n = observations["center_of_mass_velocity_observation"]
-        act_frc_obs_n = observations["actuator_force_observation"] / 100.0
-        lin_vel_cmd_n = commands["linear_velocity_step_command"]
-        return model.actor(dh_joint_pos_n, dh_joint_vel_n, com_inertia_n, com_vel_n, act_frc_obs_n, lin_vel_cmd_n)
+        # Debugging: print available observation keys and shapes
+        import logging
+        logging.info(f"Available observation keys: {list(observations.keys())}")
+        
+        joint_pos_n = observations["dhjoint_position_observation"]
+        joint_vel_n = observations["dhjoint_velocity_observation"]
+        imu_acc_3 = observations["imu_acc_obs"]
+        imu_gyro_3 = observations["imu_gyro_obs"]
+        lin_vel_cmd_2 = commands["linear_velocity_step_command"]
+        last_action_n = observations["last_action_observation"]
+        history_n = observations["history_observation"]
+        
+        # Log shapes for debugging
+        logging.info(f"joint_pos_n shape: {joint_pos_n.shape}")
+        logging.info(f"joint_vel_n shape: {joint_vel_n.shape}")
+        logging.info(f"imu_acc_3 shape: {imu_acc_3.shape}")
+        logging.info(f"imu_gyro_3 shape: {imu_gyro_3.shape}")
+        logging.info(f"lin_vel_cmd_2 shape: {lin_vel_cmd_2.shape}")
+        logging.info(f"last_action_n shape: {last_action_n.shape}")
+        logging.info(f"history_n shape: {history_n.shape}")
+        
+        x_n = jnp.concatenate(
+            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], axis=-1
+        )
+        logging.info(f"Concatenated input shape: {x_n.shape}")
+        
+        return model.actor(
+            joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n
+        )
 
     def _run_critic(
         self,
-        model: KbotModel,
+        model: ZbotModel,
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
     ) -> Array:
-        dh_joint_pos_n = observations["dhjoint_position_observation"]
-        dh_joint_vel_n = observations["dhjoint_velocity_observation"]
-        com_inertia_n = observations["center_of_mass_inertia_observation"]
-        com_vel_n = observations["center_of_mass_velocity_observation"]
-        act_frc_obs_n = observations["actuator_force_observation"] / 100.0
-        lin_vel_cmd_n = commands["linear_velocity_step_command"]
-        return model.critic(dh_joint_pos_n, dh_joint_vel_n, com_inertia_n, com_vel_n, act_frc_obs_n, lin_vel_cmd_n)
+        joint_pos_n = observations["dhjoint_position_observation"]
+        joint_vel_n = observations["dhjoint_velocity_observation"]
+        imu_acc_3 = observations["imu_acc_obs"]
+        imu_gyro_3 = observations["imu_gyro_obs"]
+        lin_vel_cmd_2 = commands["linear_velocity_step_command"]
+        last_action_n = observations["last_action_observation"]
+        history_n = observations["history_observation"]
+        return model.critic(
+            joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n
+        )
 
     def get_on_policy_log_probs(
         self,
-        model: KbotModel,
+        model: ZbotModel,
         trajectories: ksim.Trajectory,
         rng: PRNGKeyArray,
     ) -> Array:
@@ -467,7 +602,7 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig]):
 
     def get_on_policy_values(
         self,
-        model: KbotModel,
+        model: ZbotModel,
         trajectories: ksim.Trajectory,
         rng: PRNGKeyArray,
     ) -> Array:
@@ -477,7 +612,7 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig]):
 
     def get_log_probs(
         self,
-        model: KbotModel,
+        model: ZbotModel,
         trajectories: ksim.Trajectory,
         rng: PRNGKeyArray,
     ) -> tuple[Array, Array]:
@@ -495,7 +630,7 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig]):
 
     def get_values(
         self,
-        model: KbotModel,
+        model: ZbotModel,
         trajectories: ksim.Trajectory,
         rng: PRNGKeyArray,
     ) -> Array:
@@ -508,7 +643,7 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig]):
 
     def sample_action(
         self,
-        model: KbotModel,
+        model: ZbotModel,
         carry: Array,
         physics_model: ksim.PhysicsModel,
         observations: FrozenDict[str, Array],
@@ -522,30 +657,28 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig]):
         critic_n = self._run_critic(model, observations, commands)
         value_n = critic_n.squeeze(-1)
 
-        joint_pos_n = observations["dhjoint_position_observation"]
-        joint_vel_n = observations["dhjoint_velocity_observation"]
-        com_inertia_n = observations["center_of_mass_inertia_observation"]
-        com_vel_n = observations["center_of_mass_velocity_observation"]
-        act_frc_obs_n = observations["actuator_force_observation"]
-        lin_vel_cmd_n = commands["linear_velocity_step_command"]
-        last_action_n = observations["last_action_observation"]
-        history_n = jnp.concatenate(
-            [
-                joint_pos_n,
-                joint_vel_n,
-                com_inertia_n,
-                com_vel_n,
-                act_frc_obs_n,
-                lin_vel_cmd_n,
-                last_action_n,
-                action_n,
-            ],
-            axis=-1,
-        )
-
-        from .standing import HISTORY_LENGTH, SINGLE_STEP_HISTORY_SIZE
-
+        # For history tracking (not used with HISTORY_LENGTH = 0)
         if HISTORY_LENGTH > 0:
+            joint_pos_n = observations["dhjoint_position_observation"]
+            joint_vel_n = observations["dhjoint_velocity_observation"]
+            imu_acc_3 = observations["imu_acc_obs"]
+            imu_gyro_3 = observations["imu_gyro_obs"]
+            lin_vel_cmd_2 = commands["linear_velocity_step_command"]
+            last_action_n = observations["last_action_observation"]
+            
+            history_n = jnp.concatenate(
+                [
+                    joint_pos_n,
+                    joint_vel_n,
+                    imu_acc_3,
+                    imu_gyro_3,
+                    lin_vel_cmd_2,
+                    last_action_n,
+                    action_n,
+                ],
+                axis=-1,
+            )
+            
             # Roll the history by shifting the existing history and adding the new data
             carry_reshaped = carry.reshape(HISTORY_LENGTH, SINGLE_STEP_HISTORY_SIZE)
             shifted_history = jnp.roll(carry_reshaped, shift=-1, axis=0)
@@ -556,20 +689,48 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig]):
 
         return action_n, history_n, AuxOutputs(log_probs=action_log_prob_n, values=value_n)
 
+    def make_export_model(self, model: ZbotModel, stochastic: bool = False, batched: bool = False) -> Callable:
+        """Makes a callable inference function that directly takes a flattened input vector and returns an action.
+
+        Returns:
+            A tuple containing the inference function and the size of the input vector.
+        """
+
+        def deterministic_model_fn(obs: Array) -> Array:
+            return model.actor.call_flat_obs(obs).mode()
+
+        def stochastic_model_fn(obs: Array) -> Array:
+            distribution = model.actor.call_flat_obs(obs)
+            return distribution.sample(seed=jax.random.PRNGKey(0))
+
+        if stochastic:
+            model_fn = stochastic_model_fn
+        else:
+            model_fn = deterministic_model_fn
+
+        if batched:
+
+            def batched_model_fn(obs: Array) -> Array:
+                return jax.vmap(model_fn)(obs)
+
+            return batched_model_fn
+
+        return model_fn
+
     def on_after_checkpoint_save(self, ckpt_path: Path, state: xax.State) -> xax.State:
         state = super().on_after_checkpoint_save(ckpt_path, state)
 
-        if not self.config.export_for_inference:
-            return state
+        model: ZbotModel = self.load_checkpoint(ckpt_path, part="model")
 
-        # Load the checkpoint and export it using xax's export function.
-        model: KbotModel = self.load_checkpoint(ckpt_path, part="model")
+        model_fn = self.make_export_model(model, stochastic=False, batched=True)
 
-        def model_fn(obs: Array, cmd: Array) -> Array:
-            return model.actor.call_flat_obs(obs, cmd).mode()
+        input_shapes: list[tuple[int, ...]] = [(NUM_INPUTS,)]
 
-        input_shapes: list[tuple[int, ...]] = [(OBS_SIZE,), (CMD_SIZE,)]
-        export(model_fn, input_shapes, ckpt_path.parent / "tf_model")
+        export(
+            model_fn,
+            input_shapes,
+            ckpt_path.parent / "tf_model",
+        )
 
         return state
 
@@ -579,24 +740,26 @@ if __name__ == "__main__":
     ZbotWalkingTask.launch(
         ZbotWalkingTaskConfig(
             num_envs=4096,
-            batch_size=64,
+            batch_size=256,
             num_passes=10,
+            epochs_per_log_step=1,
             # Simulation parameters.
             dt=0.002,
             ctrl_dt=0.02,
-            max_action_latency=0.0,
+            max_action_latency=0.005,
             min_action_latency=0.0,
-            valid_every_n_steps=25,
+            valid_every_n_steps=5,
             valid_first_n_steps=0,
-            rollout_length_seconds=2.5,
+            save_every_n_steps=5,
+            rollout_length_seconds=5.0,
             # PPO parameters
             gamma=0.97,
             lam=0.95,
             entropy_coef=0.001,
-            learning_rate=3e-4,
+            learning_rate=1e-4,
             clip_param=0.3,
             max_grad_norm=1.0,
-            use_mit_actuators=True,
-            action_scale=0.5,
+            export_for_inference=True,
+            use_mit_actuators=False,
         ),
     )
