@@ -146,7 +146,9 @@ async def configure_actuators(kos: pykos.KOS, robot_urdf_path: str, actuator_par
         kd = ac.kd
 
         # Configure the actuator through KOS API
-        logger.info(f"Configuring actuator {ac.actuator_id} ({joint_name}): kp={kp}, kd={kd}, max_torque={max_torque}")
+        logger.info(
+            "Configuring actuator %d (%s): kp=%f, kd=%f, max_torque=%f", ac.actuator_id, joint_name, kp, kd, max_torque
+        )
         await kos.actuator.configure_actuator(
             actuator_id=ac.actuator_id,
             kp=kp,

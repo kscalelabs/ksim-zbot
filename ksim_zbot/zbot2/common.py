@@ -1,9 +1,11 @@
+"""Common definitions and utilities for Z-Bot tasks."""
+
 import abc
 import asyncio
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Generic, List, TypedDict, TypeVar
+from typing import Callable, Generic, TypedDict, TypeVar
 
 import distrax
 import equinox as eqx
@@ -20,7 +22,7 @@ from ksim.actuators import Actuators, NoiseType
 from ksim.types import PhysicsData
 from mujoco import mjx
 from mujoco_scenes.mjcf import load_mjmodel
-from scipy.interpolate import CubicSpline
+from scipy.interpolate import CubicSpline  # type: ignore[import-untyped]
 from xax.nn.export import export
 from xax.utils.types.frozen_dict import FrozenDict
 
@@ -73,7 +75,7 @@ class ZbotTaskConfig(ksim.PPOConfig):
     )
 
 
-ErrorGainData = List[dict[str, float]]
+ErrorGainData = list[dict[str, float]]
 
 
 class FeetechParams(TypedDict):
@@ -96,7 +98,7 @@ class FeetechActuators(Actuators):
         max_torque: Array,
         kp: Array,
         kd: Array,
-        error_gain_data: List[ErrorGainData],  # Mandatory
+        error_gain_data: list[ErrorGainData],  # Mandatory
         action_noise: float = 0.0,
         action_noise_type: NoiseType = "none",
         torque_noise: float = 0.0,
@@ -107,7 +109,7 @@ class FeetechActuators(Actuators):
         self.kd = kd
         num_outputs = kp.shape[0]
 
-        if len(error_gain_data) != num_outputs:
+        if len(error_gain_data) != num_outputs:  # type: ignore[arg-type]
             raise ValueError(
                 f"Length of error_gain_data ({len(error_gain_data)}) must match number of actuators ({num_outputs})."
             )
@@ -117,7 +119,7 @@ class FeetechActuators(Actuators):
         actual_knot_counts: list[int] = []
 
         # --- Process data (same as before) ---
-        for i, ed in enumerate(error_gain_data):
+        for i, ed in enumerate(error_gain_data):  # type: ignore[arg-type]
             # ... (validation checks: None, len < 2, duplicates) ...
             if ed is None or len(ed) < 2:
                 raise ValueError(f"Actuator {i}: Invalid error_gain_data.")
@@ -170,7 +172,7 @@ class FeetechActuators(Actuators):
         self.torque_noise_type = torque_noise_type
 
     # --- Spline evaluation: Remove dynamic slice before searchsorted ---
-    def _eval_spline(self, x_val_sat, knots, coeffs, knot_count):
+    def _eval_spline(self, x_val_sat: Array, knots: Array, coeffs: Array, knot_count: int) -> Array:
         """Evaluate spline using SciPy format on potentially padded arrays (dynamic slice fix)."""
         # ***** CHANGE 2: Search on the full padded knot array *****
         # `searchsorted` works correctly with finite x_val_sat and jnp.inf padding
@@ -196,14 +198,14 @@ class FeetechActuators(Actuators):
         pos_error = action - current_pos
         vel_error = -current_vel
 
-        def process_single_joint(err, k, c, kc, flag, default_eg):
+        def process_single_joint(err: Array, k: Array, c: Array, kc: int, flag: bool, default_eg: float) -> Array:
             abs_err = jnp.abs(err)
             x_clamped = jnp.clip(abs_err, k[0], k[kc - 1])  # Use knot_count 'kc' for safe indexing
 
-            def eval_spline_branch():
+            def eval_spline_branch() -> Array:
                 return self._eval_spline(x_clamped, k, c, kc)
 
-            def default_gain_branch():
+            def default_gain_branch() -> Array:
                 return default_eg
 
             result = jax.lax.cond(flag, eval_spline_branch, default_gain_branch)
@@ -235,6 +237,7 @@ class ZbotTask(ksim.PPOTask[ZbotTaskConfig], Generic[Config]):
     @abc.abstractmethod
     def model_input_shapes(self) -> list[tuple[int, ...]]:
         """Returns a list of shapes expected by the exported model's inference function.
+
         For MLP: [(num_inputs,)]
         For LSTM: [(num_inputs,), (depth, 2, hidden_size)]
         """
@@ -362,7 +365,7 @@ class ZbotTask(ksim.PPOTask[ZbotTaskConfig], Generic[Config]):
                 raise ValueError("sts3250_params['error_gain_data'] must be a list.")
 
             # Build a list of error_gain_data (one entry per joint)
-            error_gain_data_list: List[ErrorGainData] = []
+            error_gain_data_list: list[ErrorGainData] = []
 
             for i, joint_name in enumerate(joint_names):
                 joint_meta = metadata[joint_name]

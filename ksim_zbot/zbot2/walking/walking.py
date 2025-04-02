@@ -433,7 +433,7 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig]):
         x_n = jnp.concatenate(
             [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], axis=-1
         )
-        logging.info(f"Concatenated input shape: {x_n.shape}")
+        logging.info("Concatenated input shape: %s", x_n.shape)
 
         return model.actor(joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n)
 
