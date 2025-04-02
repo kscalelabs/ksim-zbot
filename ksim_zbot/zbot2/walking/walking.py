@@ -24,14 +24,7 @@ from mujoco_scenes.mjcf import load_mjmodel
 from xax.nn.export import export
 from xax.utils.types.frozen_dict import FrozenDict
 
-from ksim_zbot.zbot2.standing.standing import (
-    DHControlPenalty,
-    DHHealthyReward,
-    FeetechActuators,
-    FeetechParams,
-    HistoryObservation,
-    LastActionObservation,
-)
+from ksim_zbot.zbot2.common import FeetechParams, FeetechActuators, ZbotTaskConfig, AuxOutputs, ZbotTask
 
 logger = logging.getLogger(__name__)
 
@@ -58,13 +51,22 @@ NUM_INPUTS = OBS_SIZE + CMD_SIZE + (SINGLE_STEP_HISTORY_SIZE * HISTORY_LENGTH)
 # NUM_INPUTS = 66 + 2 + (0 * 0) = 68
 NUM_OUTPUTS = 20
 
+@attrs.define(frozen=True)
+class HistoryObservation(ksim.Observation):
+    def observe(self, state: ksim.RolloutVariables, rng: PRNGKeyArray) -> Array:
+        if not isinstance(state.carry, Array):
+            raise ValueError("Carry is not a history array")
+        return state.carry
+    
+@attrs.define(frozen=True)
+class LastActionObservation(ksim.Observation):
+    noise: float = attrs.field(default=0.0)
 
-@jax.tree_util.register_dataclass
-@dataclass(frozen=True)
-class AuxOutputs:
-    log_probs: Array
-    values: Array
+    def observe(self, rollout_state: ksim.RolloutVariables, rng: PRNGKeyArray) -> Array:
+        return rollout_state.physics_state.most_recent_action
 
+    def add_noise(self, observation: Array, rng: PRNGKeyArray) -> Array:
+        return observation + jax.random.normal(rng, observation.shape) * self.noise
 
 class NaiveVelocityReward(ksim.Reward):
     def __call__(self, trajectory: ksim.Trajectory) -> Array:
@@ -138,6 +140,27 @@ class DHForwardReward(ksim.Reward):
         else:
             x_delta = -jnp.clip(trajectory.qvel[1], -1.0, 1.0)
         return x_delta
+
+@attrs.define(frozen=True, kw_only=True)
+class DHControlPenalty(ksim.Reward):
+    """Legacy default humanoid control cost that penalizes squared action magnitude."""
+
+    def __call__(self, trajectory: ksim.Trajectory) -> Array:
+        return jnp.sum(jnp.square(trajectory.action), axis=-1)
+
+
+@attrs.define(frozen=True, kw_only=True)
+class DHHealthyReward(ksim.Reward):
+    """Legacy default humanoid healthy reward that gives binary reward based on height."""
+
+    healthy_z_lower: float = attrs.field(default=0.2)
+    healthy_z_upper: float = attrs.field(default=0.5)
+
+    def __call__(self, trajectory: ksim.Trajectory) -> Array:
+        height = trajectory.qpos[..., 2]
+        is_healthy = jnp.where(height < self.healthy_z_lower, 0.0, 1.0)
+        is_healthy = jnp.where(height > self.healthy_z_upper, 0.0, is_healthy)
+        return is_healthy
 
 
 class ZbotActor(eqx.Module):
@@ -263,18 +286,8 @@ class ZbotModel(eqx.Module):
 
 
 @dataclass
-class ZbotWalkingTaskConfig(ksim.PPOConfig):
+class ZbotWalkingTaskConfig(ZbotTaskConfig):
     """Config for the ZBot walking task."""
-
-    robot_urdf_path: str = xax.field(
-        value="ksim_zbot/kscale-assets/zbot-6dof-feet/",
-        help="The path to the assets directory for the robot.",
-    )
-
-    actuator_params_path: str = xax.field(
-        value="ksim_zbot/kscale-assets/actuators/feetech/",
-        help="The path to the assets directory for feetech actuator models",
-    )
 
     action_scale: float = xax.field(
         value=1.0,
@@ -295,50 +308,15 @@ class ZbotWalkingTaskConfig(ksim.PPOConfig):
         help="Weight decay for the Adam optimizer.",
     )
 
-    # Mujoco parameters.
-    use_mit_actuators: bool = xax.field(
-        value=False,
-        help="Whether to use the MIT actuator model, where the actions are position commands",
-    )
-    kp: float = xax.field(
-        value=1.0,
-        help="The Kp for the actuators",
-    )
-    kd: float = xax.field(
-        value=0.1,
-        help="The Kd for the actuators",
-    )
-    armature: float = xax.field(
-        value=1e-2,
-        help="A value representing the effective inertia of the actuator armature",
-    )
-    friction: float = xax.field(
-        value=1e-6,
-        help="The dynamic friction loss for the actuator",
-    )
-
-    # Rendering parameters.
-    render_track_body_id: int | None = xax.field(
-        value=None,
-        help="The body id to track with the render camera.",
-    )
-
-    # Checkpointing parameters.
-    export_for_inference: bool = xax.field(
-        value=True,
-        help="Whether to export the model for inference.",
-    )
-
-    render_distance: float = xax.field(
-        value=1.5,
-        help="The distance to the render camera from the robot.",
-    )
-
 
 Config = TypeVar("Config", bound=ZbotWalkingTaskConfig)
 
 
-class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig], Generic[Config]):
+class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig]):
+    @property
+    def model_input_shapes(self) -> list[tuple[int, ...]]:
+        return [(NUM_INPUTS,)]
+
     def get_optimizer(self) -> optax.GradientTransformation:
         """Builds the optimizer.
 
@@ -355,168 +333,6 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig], Generic[Config]):
         )
 
         return optimizer
-
-    def get_mujoco_model(self) -> mujoco.MjModel:
-        # mjcf_path = (Path(self.config.robot_urdf_path) / "scene.mjcf").resolve().as_posix()
-        mjcf_path = (Path(self.config.robot_urdf_path) / "robot.mjcf").resolve().as_posix()
-        print(f"Loading MJCF model from {mjcf_path}")
-        mj_model = load_mjmodel(mjcf_path, scene="smooth")
-
-        mj_model.opt.timestep = jnp.array(self.config.dt)
-        mj_model.opt.iterations = 6
-        mj_model.opt.ls_iterations = 6
-        mj_model.opt.disableflags = mjx.DisableBit.EULERDAMP
-        mj_model.opt.solver = mjx.SolverType.CG
-
-        sts3215_params, sts3250_params = self._load_feetech_params()
-
-        required_keys = ["damping", "armature", "frictionloss", "max_torque"]
-        for key in required_keys:
-            if key not in sts3215_params:
-                raise ValueError(f"Missing required key '{key}' in sts3215 parameters.")
-            if key not in sts3250_params:
-                raise ValueError(f"Missing required key '{key}' in sts3250 parameters.")
-
-        # Apply servo-specific parameters based on joint name suffix
-        for i in range(mj_model.njnt):
-            joint_name = mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_JOINT, i)
-            if joint_name is None or not any(suffix in joint_name for suffix in ["_15", "_50"]):
-                continue
-
-            dof_id = mj_model.jnt_dofadr[i]
-
-            # Apply parameters based on the joint suffix
-            if "_15" in joint_name:  # STS3215 servos (arms)
-                mj_model.dof_damping[dof_id] = sts3215_params["damping"]
-                mj_model.dof_armature[dof_id] = sts3215_params["armature"]
-                mj_model.dof_frictionloss[dof_id] = sts3215_params["frictionloss"]
-
-                # Get base name for actuator (remove the _15 suffix)
-                base_name = joint_name.rsplit("_", 1)[0]
-                actuator_name = f"{base_name}_15_ctrl"
-
-                actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
-                if actuator_id >= 0:
-                    max_torque = float(sts3215_params["max_torque"])
-                    mj_model.actuator_forcerange[actuator_id, :] = [
-                        -max_torque,
-                        max_torque,
-                    ]
-
-            elif "_50" in joint_name:  # STS3250 servos (legs)
-                mj_model.dof_damping[dof_id] = sts3250_params["damping"]
-                mj_model.dof_armature[dof_id] = sts3250_params["armature"]
-                mj_model.dof_frictionloss[dof_id] = sts3250_params["frictionloss"]
-
-                # Get base name for actuator (remove the _50 suffix)
-                base_name = joint_name.rsplit("_", 1)[0]
-                actuator_name = f"{base_name}_50_ctrl"
-
-                actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
-                if actuator_id >= 0:
-                    max_torque = float(sts3250_params["max_torque"])
-                    mj_model.actuator_forcerange[actuator_id, :] = [
-                        -max_torque,
-                        max_torque,
-                    ]
-
-        return mj_model
-
-    def get_mujoco_model_metadata(self, mj_model: mujoco.MjModel) -> dict[str, JointMetadataOutput]:
-        metadata = asyncio.run(ksim.get_mujoco_model_metadata(self.config.robot_urdf_path, cache=False))
-
-        if metadata.joint_name_to_metadata is None:
-            raise ValueError("Joint metadata is not available")
-
-        return metadata.joint_name_to_metadata
-
-    def _load_feetech_params(self) -> tuple[FeetechParams, FeetechParams]:
-        params_path = Path(self.config.actuator_params_path)
-        params_file_3215 = params_path / "sts3215_12v_params.json"
-        params_file_3250 = params_path / "sts3250_params.json"
-
-        if not params_file_3215.exists():
-            raise ValueError(
-                f"Feetech parameters file '{params_file_3215}' not found. Please ensure it exists in '{params_path}'."
-            )
-        if not params_file_3250.exists():
-            raise ValueError(
-                f"Feetech parameters file '{params_file_3250}' not found. Please ensure it exists in '{params_path}'."
-            )
-
-        with open(params_file_3215, "r") as f:
-            params_3215: FeetechParams = json.load(f)
-        with open(params_file_3250, "r") as f:
-            params_3250: FeetechParams = json.load(f)
-        return params_3215, params_3250
-
-    def get_actuators(
-        self,
-        physics_model: ksim.PhysicsModel,
-        metadata: dict[str, JointMetadataOutput] | None = None,
-    ) -> ksim.Actuators:
-        if metadata is not None:
-            joint_names = sorted(metadata.keys())
-
-            num_joints = len(joint_names)
-            max_torque_arr = jnp.zeros(num_joints)
-            kp_arr = jnp.zeros(num_joints)
-            kd_arr = jnp.zeros(num_joints)
-
-            sts3215_params, sts3250_params = self._load_feetech_params()
-            required_keys = ["max_torque", "error_gain_data"]
-            for key in required_keys:
-                if key not in sts3215_params:
-                    raise ValueError(f"Missing required key '{key}' in sts3215 parameters.")
-                if key not in sts3250_params:
-                    raise ValueError(f"Missing required key '{key}' in sts3250 parameters.")
-
-            if not isinstance(sts3215_params["error_gain_data"], list):
-                raise ValueError("sts3215_params['error_gain_data'] must be a list.")
-            if not isinstance(sts3250_params["error_gain_data"], list):
-                raise ValueError("sts3250_params['error_gain_data'] must be a list.")
-
-            # Build a list of error_gain_data (one entry per joint)
-            error_gain_data_list: List[ErrorGainData] = []
-
-            for i, joint_name in enumerate(joint_names):
-                joint_meta = metadata[joint_name]
-                if "_15" in joint_name:
-                    max_torque_arr = max_torque_arr.at[i].set(sts3215_params["max_torque"])
-                    error_gain_data_list.append(sts3215_params["error_gain_data"])
-                elif "_50" in joint_name:
-                    max_torque_arr = max_torque_arr.at[i].set(sts3250_params["max_torque"])
-                    error_gain_data_list.append(sts3250_params["error_gain_data"])
-                else:
-                    raise ValueError(f"Invalid joint name: {joint_name}")
-
-                if joint_meta.kp is None:
-                    raise ValueError(f"kp is not available for joint {joint_name}")
-                if joint_meta.kd is None:
-                    raise ValueError(f"kd is not available for joint {joint_name}")
-
-                logger.info(f"For joint {joint_name}, id: {i}, kp: {joint_meta.kp}, kd: {joint_meta.kd}")
-
-                try:
-                    kp_val = float(joint_meta.kp)
-                    kd_val = float(joint_meta.kd)
-                except ValueError as e:
-                    raise ValueError(f"Could not convert kp/kd gains to a float for joint {joint_name}: {e}")
-
-                kp_arr = kp_arr.at[i].set(kp_val)
-                kd_arr = kd_arr.at[i].set(kd_val)
-        else:
-            raise ValueError("Metadata is not available")
-        return FeetechActuators(
-            max_torque=max_torque_arr,
-            kp=kp_arr,
-            kd=kd_arr,
-            error_gain_data=error_gain_data_list,
-            action_noise=0.0,
-            action_noise_type="none",
-            torque_noise=0.0,
-            torque_noise_type="none",
-        )
 
     def get_randomization(self, physics_model: ksim.PhysicsModel) -> list[ksim.Randomization]:
         return [
@@ -740,50 +556,6 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig], Generic[Config]):
 
         return action_n, history_n, AuxOutputs(log_probs=action_log_prob_n, values=value_n)
 
-    def make_export_model(self, model: ZbotModel, stochastic: bool = False, batched: bool = False) -> Callable:
-        """Makes a callable inference function that directly takes a flattened input vector and returns an action.
-
-        Returns:
-            A tuple containing the inference function and the size of the input vector.
-        """
-
-        def deterministic_model_fn(obs: Array) -> Array:
-            return model.actor.call_flat_obs(obs).mode()
-
-        def stochastic_model_fn(obs: Array) -> Array:
-            distribution = model.actor.call_flat_obs(obs)
-            return distribution.sample(seed=jax.random.PRNGKey(0))
-
-        if stochastic:
-            model_fn = stochastic_model_fn
-        else:
-            model_fn = deterministic_model_fn
-
-        if batched:
-
-            def batched_model_fn(obs: Array) -> Array:
-                return jax.vmap(model_fn)(obs)
-
-            return batched_model_fn
-
-        return model_fn
-
-    def on_after_checkpoint_save(self, ckpt_path: Path, state: xax.State) -> xax.State:
-        state = super().on_after_checkpoint_save(ckpt_path, state)
-
-        model: ZbotModel = self.load_checkpoint(ckpt_path, part="model")
-
-        model_fn = self.make_export_model(model, stochastic=False, batched=True)
-
-        input_shapes: list[tuple[int, ...]] = [(NUM_INPUTS,)]
-
-        export(
-            model_fn,
-            input_shapes,
-            ckpt_path.parent / "tf_model",
-        )
-
-        return state
 
 
 if __name__ == "__main__":
@@ -801,7 +573,7 @@ if __name__ == "__main__":
             min_action_latency=0.0,
             log_full_trajectory_every_n_steps=20,
             log_full_trajectory_on_first_step=True,
-            save_every_n_steps=5,
+            save_every_n_steps=20,
             rollout_length_seconds=5.0,
             # PPO parameters
             gamma=0.97,
