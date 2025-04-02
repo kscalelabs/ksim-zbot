@@ -24,7 +24,7 @@ from mujoco_scenes.mjcf import load_mjmodel
 from xax.nn.export import export
 from xax.utils.types.frozen_dict import FrozenDict
 
-from .standing import (
+from ksim_zbot.zbot2.standing.standing import (
     DHControlPenalty,
     DHHealthyReward,
     FeetechActuators,
