@@ -22,7 +22,7 @@ from ksim.actuators import Actuators, NoiseType
 from ksim.types import PhysicsData
 from mujoco import mjx
 from mujoco_scenes.mjcf import load_mjmodel
-from scipy.interpolate import CubicSpline  # type: ignore[import-untyped]
+from scipy.interpolate import CubicSpline
 from xax.nn.export import export
 from xax.utils.types.frozen_dict import FrozenDict
 
@@ -109,7 +109,7 @@ class FeetechActuators(Actuators):
         self.kd = kd
         num_outputs = kp.shape[0]
 
-        if len(error_gain_data) != num_outputs:  # type: ignore[arg-type]
+        if len(error_gain_data) != num_outputs:
             raise ValueError(
                 f"Length of error_gain_data ({len(error_gain_data)}) must match number of actuators ({num_outputs})."
             )
@@ -119,7 +119,7 @@ class FeetechActuators(Actuators):
         actual_knot_counts: list[int] = []
 
         # --- Process data (same as before) ---
-        for i, ed in enumerate(error_gain_data):  # type: ignore[arg-type]
+        for i, ed in enumerate(error_gain_data):
             # ... (validation checks: None, len < 2, duplicates) ...
             if ed is None or len(ed) < 2:
                 raise ValueError(f"Actuator {i}: Invalid error_gain_data.")
