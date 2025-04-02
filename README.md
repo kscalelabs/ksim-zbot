@@ -35,9 +35,12 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-
-# Runing
+5. Initalize submodules
 ```bash
-python -m ksim_zbot.zbot2.deploy.deploy_sim --model_path /home/ali/repos/ksim_stuff/ksim-zbot/ksim_zbot/zbot2/walking/zbot_walking_task/run_13/checkpoints/tf_model --episode_length 20
+git submodule update --init --recursive
 ```
 
+6. Runing
+```bash
+python -m ksim_zbot.zbot2.deploy.deploy_sim --model_path ksim_zbot/zbot2/walking/zbot_walking_task/run_13/checkpoints/tf_model --episode_length 20
+```
