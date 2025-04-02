@@ -152,12 +152,13 @@ async def configure_actuators(kos: pykos.KOS, robot_urdf_path: str, actuator_par
 
 
 async def reset(kos: pykos.KOS) -> None:
+    """Reset the robot to a starting position."""
     await kos.sim.reset(
-        pos={"x": 0.0, "y": 0.0, "z": 0.41024304},
+        pos={"x": 0.0, "y": 0.0, "z": 0.41},
         quat={"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
         joints=[
-            {"name": actuator.joint_name, "pos": pos}
-            for actuator, pos in zip(ACTUATOR_LIST, [0.0] * len(ACTUATOR_LIST))
+            {"name": actuator.joint_name, "pos": 0.0}
+            for actuator in ACTUATOR_LIST
         ],
     )
 
