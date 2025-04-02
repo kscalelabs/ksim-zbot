@@ -11,6 +11,7 @@ import distrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 import ksim
 import mujoco
 import optax
@@ -69,110 +70,137 @@ class FeetechParams(TypedDict):
 
 
 class FeetechActuators(Actuators):
-    """Feetech actuator controller for feetech motors (3215 and 3250) with derivative (kd) term."""
+    """Feetech actuator controller using padded JAX arrays (dynamic slice fix)."""
 
     def __init__(
         self,
         max_torque: Array,
         kp: Array,
         kd: Array,
-        error_gain_data: Optional[List[ErrorGainData]] = None,
+        error_gain_data: List[ErrorGainData], # Mandatory
         action_noise: float = 0.0,
         action_noise_type: NoiseType = "none",
         torque_noise: float = 0.0,
         torque_noise_type: NoiseType = "none",
     ) -> None:
-        self.max_torque = max_torque  # Array of shape (NUM_OUTPUTS,)
-        self.kp = kp  # Array of shape (NUM_OUTPUTS,)
-        self.kd = kd  # Array of shape (NUM_OUTPUTS,)
+        self.max_torque = max_torque
+        self.kp = kp
+        self.kd = kd
+        num_outputs = kp.shape[0]
 
-        if error_gain_data is not None:
-            spline_knots: list[Array] = []
-            spline_coeffs: list[Array] = []
-            for ed in error_gain_data:
-                if ed is not None:
-                    x_vals = [d["pos_err"] for d in ed]
-                    y_vals = [d["error_gain"] for d in ed]
-                    cs = CubicSpline(x_vals, y_vals, extrapolate=True)
-                    spline_knots.append(jnp.array(cs.x))
-                    spline_coeffs.append(jnp.array(cs.c))
-                else:
-                    spline_knots.append(jnp.array([]))  # Use empty array instead of None
-                    spline_coeffs.append(jnp.array([]))
-            self.spline_knots = spline_knots
-            self.spline_coeffs = spline_coeffs
-            self.error_gain = jnp.array([])  # Assign an empty Array when splines are active.
-        else:  # I don't like this, need to fix
-            self.spline_knots = []
-            self.spline_coeffs = []
-            self.error_gain = jnp.array(0.0)
+        if len(error_gain_data) != num_outputs:
+            raise ValueError(f"Length of error_gain_data ({len(error_gain_data)}) must match number of actuators ({num_outputs}).")
 
+        temp_knots_list: list[np.ndarray] = []
+        temp_coeffs_list: list[np.ndarray] = []
+        actual_knot_counts: list[int] = []
+
+        # --- Process data (same as before) ---
+        for i, ed in enumerate(error_gain_data):
+            # ... (validation checks: None, len < 2, duplicates) ...
+            if ed is None or len(ed) < 2: raise ValueError(f"Actuator {i}: Invalid error_gain_data.")
+            ed_sorted = sorted(ed, key=lambda d: d["pos_err"])
+            x_vals = [d["pos_err"] for d in ed_sorted]
+            if len(set(x_vals)) != len(x_vals): raise ValueError(f"Actuator {i}: Duplicate pos_err.")
+            y_vals = [d["error_gain"] for d in ed_sorted]
+
+            cs = CubicSpline(x_vals, y_vals, extrapolate=True)
+            knots = np.array(cs.x, dtype=np.float32)
+            coeffs = np.array(cs.c, dtype=np.float32)
+            if knots.size < 2: raise ValueError(f"Actuator {i}: Spline fitting < 2 knots.")
+
+            temp_knots_list.append(knots)
+            temp_coeffs_list.append(coeffs)
+            actual_knot_counts.append(knots.size)
+
+        max_num_knots = max(actual_knot_counts) if actual_knot_counts else 0
+        if max_num_knots < 2: raise ValueError("Valid spline data requires at least 2 knots.")
+        max_num_coeffs_intervals = max_num_knots - 1
+
+        # --- Create padded JAX arrays ---
+        # ***** CHANGE 1: Use jnp.inf for knot padding *****
+        knot_padding_value = jnp.inf
+        coeff_padding_value = jnp.nan # Coeff padding can be NaN or 0
+
+        self.stacked_knots = jnp.full((num_outputs, max_num_knots), knot_padding_value, dtype=jnp.float32)
+        self.stacked_coeffs = jnp.full((num_outputs, 4, max_num_coeffs_intervals), coeff_padding_value, dtype=jnp.float32)
+        self.knot_counts = jnp.array(actual_knot_counts, dtype=jnp.int32)
+
+        # --- Fill padded arrays (same as before) ---
+        for i in range(num_outputs):
+            k = temp_knots_list[i]
+            c = temp_coeffs_list[i]
+            count = actual_knot_counts[i] # Use Python int here for slicing numpy array k
+            self.stacked_knots = self.stacked_knots.at[i, :count].set(jnp.array(k))
+            self.stacked_coeffs = self.stacked_coeffs.at[i, :, :(count - 1)].set(jnp.array(c))
+
+        # --- Store other parameters (same as before) ---
+        self.has_spline_data_flags = jnp.ones(num_outputs, dtype=bool)
+        self.default_error_gain = jnp.ones(num_outputs, dtype=jnp.float32)
         self.action_noise = action_noise
         self.action_noise_type = action_noise_type
         self.torque_noise = torque_noise
         self.torque_noise_type = torque_noise_type
 
-    def get_ctrl(self, action: Array, physics_data: PhysicsData, rng: PRNGKeyArray) -> Array:
-        """Compute torque control using Feetech parameters and a cubic spline for error gain.
 
-        Assumes `action` is the target position.
-        """
+    # --- Spline evaluation: Remove dynamic slice before searchsorted ---
+    def _eval_spline(self, x_val_sat, knots, coeffs, knot_count):
+        """Evaluate spline using SciPy format on potentially padded arrays (dynamic slice fix)."""
+
+        # ***** CHANGE 2: Search on the full padded knot array *****
+        # `searchsorted` works correctly with finite x_val_sat and jnp.inf padding
+        search_result = jnp.searchsorted(knots, x_val_sat)
+
+        # Clip the index result to the valid range for *coefficients* [0, knot_count - 2]
+        # This handles cases where search_result might be >= knot_count
+        idx = jnp.clip(search_result - 1, 0, knot_count - 2)
+
+        # Calculate difference from the knot (use idx which is safe)
+        dx = x_val_sat - knots[idx]
+
+        # Evaluate polynomial (same as before)
+        spline_value = coeffs[0, idx] * dx**3 + coeffs[1, idx] * dx**2 + coeffs[2, idx] * dx + coeffs[3, idx]
+        return spline_value
+
+    # --- get_ctrl remains the same as the previous version ---
+    def get_ctrl(self, action: Array, physics_data: PhysicsData, rng: PRNGKeyArray) -> Array:
+        """Compute torque control using Feetech parameters and mandatory cubic spline (JAX friendly)."""
         pos_rng, tor_rng = jax.random.split(rng)
-        # Extract current joint positions and velocities (ignoring root if necessary)
         current_pos = physics_data.qpos[7:]
         current_vel = physics_data.qvel[6:]
-
-        # Compute position error (target minus current) and velocity error (assume target velocity is zero)
         pos_error = action - current_pos
         vel_error = -current_vel
 
-        # If spline parameters exist, use them per joint.
-        if self.spline_knots and self.spline_coeffs:
+        def process_single_joint(err, k, c, kc, flag, default_eg):
+            abs_err = jnp.abs(err)
+            x_clamped = jnp.clip(abs_err, k[0], k[kc - 1]) # Use knot_count 'kc' for safe indexing
 
-            def _eval_spline(x_val: Array, knots: Array, coeffs: Array) -> Array:
-                lower = knots[0]
-                upper = knots[-1]
-                x_val_sat = jnp.where(x_val <= lower, lower, jnp.where(x_val >= upper, upper, x_val))
-                idx = jnp.clip(jnp.searchsorted(knots, x_val_sat) - 1, 0, knots.shape[0] - 2)
-                dx = x_val_sat - knots[idx]
-                spline_value = coeffs[0, idx] * dx**3 + coeffs[1, idx] * dx**2 + coeffs[2, idx] * dx + coeffs[3, idx]
-                return spline_value
+            def eval_spline_branch():
+                 return self._eval_spline(x_clamped, k, c, kc)
+            def default_gain_branch():
+                 return default_eg
 
-            error_gain_list = []
-            for i in range(pos_error.shape[0]):
-                # Use spline interpolation if the current joint has non-empty spline data.
-                if self.spline_knots[i].size > 0:
-                    eg = _eval_spline(jnp.abs(pos_error[i]), self.spline_knots[i], self.spline_coeffs[i])
-                else:
-                    eg = self.error_gain[i]
-                error_gain_list.append(eg)
-            error_gain = jnp.stack(error_gain_list)
-        else:
-            error_gain = self.error_gain
+            result = jax.lax.cond(flag, eval_spline_branch, default_gain_branch)
+            return result
 
-        # Compute the combined control (PD control law)
+        error_gain = jax.vmap(process_single_joint)(
+            pos_error,
+            self.stacked_knots,
+            self.stacked_coeffs,
+            self.knot_counts,
+            self.has_spline_data_flags,
+            self.default_error_gain
+        )
+
         duty = self.kp * error_gain * pos_error + self.kd * vel_error
-
-        # Multiply by max torque, add torque noise, and clip to limits
         torque = jnp.clip(
             self.add_noise(self.torque_noise, self.torque_noise_type, duty * self.max_torque, tor_rng),
             -self.max_torque,
             self.max_torque,
         )
-        # jax.debug.print(
-        #     "duty: {} torque: {} kp: {} kd: {} error_gain: {} pos_error: {} vel_error: {}",
-        #     duty,
-        #     torque,
-        #     self.kp,
-        #     self.kd,
-        #     self.error_gain,
-        #     pos_error,
-        #     vel_error,
-        # )
         return torque
 
     def get_default_action(self, physics_data: PhysicsData) -> Array:
-        # Default action: current joint positions.
         return physics_data.qpos[7:]
 
 
@@ -1002,6 +1030,9 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
         )
 
         return state
+
+
+
 
 
 if __name__ == "__main__":
