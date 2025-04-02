@@ -1,10 +1,8 @@
 """Defines simple task for training a walking policy for Z-Bot."""
 
-import asyncio
-import json
+import logging
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable, Generic, TypeVar
+from typing import TypeVar
 
 import attrs
 import distrax
@@ -12,19 +10,12 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import ksim
-import mujoco
 import optax
 import xax
-import logging
-import colorlogging
 from jaxtyping import Array, PRNGKeyArray
-from kscale.web.gen.api import JointMetadataOutput
-from mujoco import mjx
-from mujoco_scenes.mjcf import load_mjmodel
-from xax.nn.export import export
 from xax.utils.types.frozen_dict import FrozenDict
 
-from ksim_zbot.zbot2.common import FeetechParams, FeetechActuators, ZbotTaskConfig, AuxOutputs, ZbotTask
+from ksim_zbot.zbot2.common import AuxOutputs, ZbotTask, ZbotTaskConfig
 
 logger = logging.getLogger(__name__)
 
@@ -51,13 +42,15 @@ NUM_INPUTS = OBS_SIZE + CMD_SIZE + (SINGLE_STEP_HISTORY_SIZE * HISTORY_LENGTH)
 # NUM_INPUTS = 66 + 2 + (0 * 0) = 68
 NUM_OUTPUTS = 20
 
+
 @attrs.define(frozen=True)
 class HistoryObservation(ksim.Observation):
     def observe(self, state: ksim.RolloutVariables, rng: PRNGKeyArray) -> Array:
         if not isinstance(state.carry, Array):
             raise ValueError("Carry is not a history array")
         return state.carry
-    
+
+
 @attrs.define(frozen=True)
 class LastActionObservation(ksim.Observation):
     noise: float = attrs.field(default=0.0)
@@ -67,6 +60,7 @@ class LastActionObservation(ksim.Observation):
 
     def add_noise(self, observation: Array, rng: PRNGKeyArray) -> Array:
         return observation + jax.random.normal(rng, observation.shape) * self.noise
+
 
 class NaiveVelocityReward(ksim.Reward):
     def __call__(self, trajectory: ksim.Trajectory) -> Array:
@@ -140,6 +134,7 @@ class DHForwardReward(ksim.Reward):
         else:
             x_delta = -jnp.clip(trajectory.qvel[1], -1.0, 1.0)
         return x_delta
+
 
 @attrs.define(frozen=True, kw_only=True)
 class DHControlPenalty(ksim.Reward):
@@ -555,7 +550,6 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig]):
             history_n = jnp.zeros(0)
 
         return action_n, history_n, AuxOutputs(log_probs=action_log_prob_n, values=value_n)
-
 
 
 if __name__ == "__main__":

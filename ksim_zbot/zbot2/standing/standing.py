@@ -1,32 +1,22 @@
 """Defines simple task for training a walking policy for Z-Bot."""
 
-import asyncio
-import json
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable, Generic, List, Optional, TypedDict, TypeVar
+from typing import Generic, TypeVar
 
 import attrs
 import distrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import numpy as np
 import ksim
 import mujoco
 import optax
 import xax
 from jaxtyping import Array, PRNGKeyArray
-from kscale.web.gen.api import JointMetadataOutput
-from ksim.actuators import Actuators, NoiseType
-from ksim.types import PhysicsData
 from mujoco import mjx
-from mujoco_scenes.mjcf import load_mjmodel
-from scipy.interpolate import CubicSpline
-from xax.nn.export import export
 from xax.utils.types.frozen_dict import FrozenDict
 
-from ksim_zbot.zbot2.common import FeetechParams, FeetechActuators, ZbotTaskConfig, AuxOutputs
+from ksim_zbot.zbot2.common import AuxOutputs, ZbotTaskConfig
 
 OBS_SIZE = 20 * 2 + 3 + 3 + 20  # position + velocity + imu_acc + imu_gyro + last_action
 CMD_SIZE = 2
@@ -47,9 +37,6 @@ class HistoryObservation(ksim.Observation):
         if not isinstance(state.carry, Array):
             raise ValueError("Carry is not a history array")
         return state.carry
-
-
-
 
 
 @attrs.define(frozen=True, kw_only=True)
@@ -335,7 +322,6 @@ class ZbotStandingTaskConfig(ZbotTaskConfig):
 
 
 class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
-    
     @property
     def model_input_shapes(self) -> list[tuple[int, ...]]:
         return [(NUM_INPUTS,)]
@@ -356,7 +342,6 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
         )
 
         return optimizer
-
 
     def get_randomization(self, physics_model: ksim.PhysicsModel) -> list[ksim.Randomization]:
         return [
@@ -654,9 +639,6 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
             history_n = jnp.zeros(0)
 
         return action_n, history_n, AuxOutputs(log_probs=action_log_prob_n, values=value_n)
-
-
-
 
 
 if __name__ == "__main__":

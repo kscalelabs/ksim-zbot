@@ -1,29 +1,29 @@
-from dataclasses import dataclass
-
-import ksim
-import xax
-import jax
-import jax.numpy as jnp
-import numpy as np
-from typing import List, TypedDict, Generic, TypeVar, Callable
+import abc
 import asyncio
 import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Generic, List, TypedDict, TypeVar
+
 import distrax
 import equinox as eqx
-from pathlib import Path
+import jax
+import jax.numpy as jnp
+import ksim
 import mujoco
-from mujoco import mjx
-import abc
-from jaxtyping import Array, PRNGKeyArray
-from xax.utils.types.frozen_dict import FrozenDict
-from mujoco_scenes.mjcf import load_mjmodel
-
-from ksim.actuators import Actuators, NoiseType
-from scipy.interpolate import CubicSpline
-from ksim.types import PhysicsData
-from xax.nn.export import export
-from kscale.web.gen.api import JointMetadataOutput
+import numpy as np
 import optax
+import xax
+from jaxtyping import Array, PRNGKeyArray
+from kscale.web.gen.api import JointMetadataOutput
+from ksim.actuators import Actuators, NoiseType
+from ksim.types import PhysicsData
+from mujoco import mjx
+from mujoco_scenes.mjcf import load_mjmodel
+from scipy.interpolate import CubicSpline
+from xax.nn.export import export
+from xax.utils.types.frozen_dict import FrozenDict
+
 
 @jax.tree_util.register_dataclass
 @dataclass(frozen=True)
@@ -31,8 +31,10 @@ class AuxOutputs:
     log_probs: Array
     values: Array
 
+
 # Define the Config TypeVar for use with Generic
 Config = TypeVar("Config", bound="ZbotTaskConfig")
+
 
 @dataclass
 class ZbotTaskConfig(ksim.PPOConfig):
@@ -47,31 +49,30 @@ class ZbotTaskConfig(ksim.PPOConfig):
         value="ksim_zbot/kscale-assets/actuators/feetech/",
         help="The path to the assets directory for feetech actuator models",
     )
-    
+
     use_mit_actuators: bool = xax.field(
         value=False,
         help="Whether to use the MIT actuator model, where the actions are position commands",
     )
-    
+
     # Checkpointing parameters.
     export_for_inference: bool = xax.field(
         value=True,
         help="Whether to export the model for inference.",
     )
-    
+
     # Rendering parameters.
     render_track_body_id: int | None = xax.field(
         value=None,
         help="The body id to track with the render camera.",
     )
-    
-    
+
     render_distance: float = xax.field(
         value=1.5,
         help="The distance to the render camera from the robot.",
     )
-    
-    
+
+
 ErrorGainData = List[dict[str, float]]
 
 
@@ -95,7 +96,7 @@ class FeetechActuators(Actuators):
         max_torque: Array,
         kp: Array,
         kd: Array,
-        error_gain_data: List[ErrorGainData], # Mandatory
+        error_gain_data: List[ErrorGainData],  # Mandatory
         action_noise: float = 0.0,
         action_noise_type: NoiseType = "none",
         torque_noise: float = 0.0,
@@ -107,7 +108,9 @@ class FeetechActuators(Actuators):
         num_outputs = kp.shape[0]
 
         if len(error_gain_data) != num_outputs:
-            raise ValueError(f"Length of error_gain_data ({len(error_gain_data)}) must match number of actuators ({num_outputs}).")
+            raise ValueError(
+                f"Length of error_gain_data ({len(error_gain_data)}) must match number of actuators ({num_outputs})."
+            )
 
         temp_knots_list: list[np.ndarray] = []
         temp_coeffs_list: list[np.ndarray] = []
@@ -116,41 +119,47 @@ class FeetechActuators(Actuators):
         # --- Process data (same as before) ---
         for i, ed in enumerate(error_gain_data):
             # ... (validation checks: None, len < 2, duplicates) ...
-            if ed is None or len(ed) < 2: raise ValueError(f"Actuator {i}: Invalid error_gain_data.")
+            if ed is None or len(ed) < 2:
+                raise ValueError(f"Actuator {i}: Invalid error_gain_data.")
             ed_sorted = sorted(ed, key=lambda d: d["pos_err"])
             x_vals = [d["pos_err"] for d in ed_sorted]
-            if len(set(x_vals)) != len(x_vals): raise ValueError(f"Actuator {i}: Duplicate pos_err.")
+            if len(set(x_vals)) != len(x_vals):
+                raise ValueError(f"Actuator {i}: Duplicate pos_err.")
             y_vals = [d["error_gain"] for d in ed_sorted]
 
             cs = CubicSpline(x_vals, y_vals, extrapolate=True)
             knots = np.array(cs.x, dtype=np.float32)
             coeffs = np.array(cs.c, dtype=np.float32)
-            if knots.size < 2: raise ValueError(f"Actuator {i}: Spline fitting < 2 knots.")
+            if knots.size < 2:
+                raise ValueError(f"Actuator {i}: Spline fitting < 2 knots.")
 
             temp_knots_list.append(knots)
             temp_coeffs_list.append(coeffs)
             actual_knot_counts.append(knots.size)
 
         max_num_knots = max(actual_knot_counts) if actual_knot_counts else 0
-        if max_num_knots < 2: raise ValueError("Valid spline data requires at least 2 knots.")
+        if max_num_knots < 2:
+            raise ValueError("Valid spline data requires at least 2 knots.")
         max_num_coeffs_intervals = max_num_knots - 1
 
         # --- Create padded JAX arrays ---
         # ***** CHANGE 1: Use jnp.inf for knot padding *****
         knot_padding_value = jnp.inf
-        coeff_padding_value = jnp.nan # Coeff padding can be NaN or 0
+        coeff_padding_value = jnp.nan  # Coeff padding can be NaN or 0
 
         self.stacked_knots = jnp.full((num_outputs, max_num_knots), knot_padding_value, dtype=jnp.float32)
-        self.stacked_coeffs = jnp.full((num_outputs, 4, max_num_coeffs_intervals), coeff_padding_value, dtype=jnp.float32)
+        self.stacked_coeffs = jnp.full(
+            (num_outputs, 4, max_num_coeffs_intervals), coeff_padding_value, dtype=jnp.float32
+        )
         self.knot_counts = jnp.array(actual_knot_counts, dtype=jnp.int32)
 
         # --- Fill padded arrays (same as before) ---
         for i in range(num_outputs):
             k = temp_knots_list[i]
             c = temp_coeffs_list[i]
-            count = actual_knot_counts[i] # Use Python int here for slicing numpy array k
+            count = actual_knot_counts[i]  # Use Python int here for slicing numpy array k
             self.stacked_knots = self.stacked_knots.at[i, :count].set(jnp.array(k))
-            self.stacked_coeffs = self.stacked_coeffs.at[i, :, :(count - 1)].set(jnp.array(c))
+            self.stacked_coeffs = self.stacked_coeffs.at[i, :, : (count - 1)].set(jnp.array(c))
 
         # --- Store other parameters (same as before) ---
         self.has_spline_data_flags = jnp.ones(num_outputs, dtype=bool)
@@ -160,11 +169,9 @@ class FeetechActuators(Actuators):
         self.torque_noise = torque_noise
         self.torque_noise_type = torque_noise_type
 
-
     # --- Spline evaluation: Remove dynamic slice before searchsorted ---
     def _eval_spline(self, x_val_sat, knots, coeffs, knot_count):
         """Evaluate spline using SciPy format on potentially padded arrays (dynamic slice fix)."""
-
         # ***** CHANGE 2: Search on the full padded knot array *****
         # `searchsorted` works correctly with finite x_val_sat and jnp.inf padding
         search_result = jnp.searchsorted(knots, x_val_sat)
@@ -191,12 +198,13 @@ class FeetechActuators(Actuators):
 
         def process_single_joint(err, k, c, kc, flag, default_eg):
             abs_err = jnp.abs(err)
-            x_clamped = jnp.clip(abs_err, k[0], k[kc - 1]) # Use knot_count 'kc' for safe indexing
+            x_clamped = jnp.clip(abs_err, k[0], k[kc - 1])  # Use knot_count 'kc' for safe indexing
 
             def eval_spline_branch():
-                 return self._eval_spline(x_clamped, k, c, kc)
+                return self._eval_spline(x_clamped, k, c, kc)
+
             def default_gain_branch():
-                 return default_eg
+                return default_eg
 
             result = jax.lax.cond(flag, eval_spline_branch, default_gain_branch)
             return result
@@ -207,7 +215,7 @@ class FeetechActuators(Actuators):
             self.stacked_coeffs,
             self.knot_counts,
             self.has_spline_data_flags,
-            self.default_error_gain
+            self.default_error_gain,
         )
 
         duty = self.kp * error_gain * pos_error + self.kd * vel_error
@@ -220,21 +228,18 @@ class FeetechActuators(Actuators):
 
     def get_default_action(self, physics_data: PhysicsData) -> Array:
         return physics_data.qpos[7:]
-    
-    
-    
+
+
 class ZbotTask(ksim.PPOTask[ZbotTaskConfig], Generic[Config]):
-    
     @property
     @abc.abstractmethod
     def model_input_shapes(self) -> list[tuple[int, ...]]:
-        """
-        Returns a list of shapes expected by the exported model's inference function.
+        """Returns a list of shapes expected by the exported model's inference function.
         For MLP: [(num_inputs,)]
         For LSTM: [(num_inputs,), (depth, 2, hidden_size)]
         """
         raise NotImplementedError()
-    
+
     def get_optimizer(self) -> optax.GradientTransformation:
         raise NotImplementedError()
 
@@ -401,17 +406,15 @@ class ZbotTask(ksim.PPOTask[ZbotTaskConfig], Generic[Config]):
 
     def get_resets(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reset]:
         raise NotImplementedError()
-    
+
     def get_events(self, physics_model: ksim.PhysicsModel) -> list[ksim.Event]:
         raise NotImplementedError()
-    
+
     def get_observations(self, physics_model: ksim.PhysicsModel) -> list[ksim.Observation]:
         raise NotImplementedError()
 
     def get_commands(self, physics_model: ksim.PhysicsModel) -> list[ksim.Command]:
         raise NotImplementedError()
-
-
 
     def get_rewards(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reward]:
         raise NotImplementedError()

@@ -2,11 +2,11 @@
 
 import argparse
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-import json
 
 import numpy as np
 import pykos
@@ -126,11 +126,11 @@ async def configure_actuators(kos: pykos.KOS, robot_urdf_path: str, actuator_par
     """Configure actuators using parameters from files."""
     # Load the Feetech parameters
     sts3215_params, sts3250_params = load_feetech_params(actuator_params_path)
-    
+
     # Configure each actuator
     for ac in ACTUATOR_LIST:
         joint_name = ac.joint_name
-        
+
         # Determine parameter values based on joint type
         if "_03" in joint_name:  # Assuming _03 corresponds to STS3215
             max_torque = sts3215_params["max_torque"]
@@ -140,11 +140,11 @@ async def configure_actuators(kos: pykos.KOS, robot_urdf_path: str, actuator_par
             max_torque = ac.max_torque
         else:
             max_torque = ac.max_torque
-        
+
         # Use the predefined kp/kd values from ACTUATOR_LIST
         kp = ac.kp
         kd = ac.kd
-        
+
         # Configure the actuator through KOS API
         logger.info(f"Configuring actuator {ac.actuator_id} ({joint_name}): kp={kp}, kd={kd}, max_torque={max_torque}")
         await kos.actuator.configure_actuator(
@@ -238,28 +238,22 @@ if __name__ == "__main__":
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--ip", type=str, default="localhost")
     parser.add_argument("--episode_length", type=int, default=60)  # seconds
-    
+
     # Add arguments to mirror standing.py configuration
     parser.add_argument(
-        "--robot_urdf_path", 
-        type=str, 
+        "--robot_urdf_path",
+        type=str,
         default="ksim_zbot/kscale-assets/zbot-6dof-feet/",
-        help="The path to the assets directory for the robot."
+        help="The path to the assets directory for the robot.",
     )
     parser.add_argument(
-        "--actuator_params_path", 
-        type=str, 
+        "--actuator_params_path",
+        type=str,
         default="ksim_zbot/kscale-assets/actuators/feetech/",
-        help="The path to the assets directory for feetech actuator models"
+        help="The path to the assets directory for feetech actuator models",
     )
-    
+
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
-    asyncio.run(main(
-        args.model_path, 
-        args.ip, 
-        args.episode_length,
-        args.robot_urdf_path,
-        args.actuator_params_path
-    ))
+    asyncio.run(main(args.model_path, args.ip, args.episode_length, args.robot_urdf_path, args.actuator_params_path))

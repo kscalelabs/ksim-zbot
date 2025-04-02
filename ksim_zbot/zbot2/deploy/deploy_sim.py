@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import json
 import logging
 import signal
 import subprocess
@@ -9,14 +10,12 @@ import sys
 import time
 import types
 from dataclasses import dataclass
-from typing import Callable
 from pathlib import Path
-import json
+from typing import Callable
 
 import numpy as np
 import pykos
 import tensorflow as tf
-import jax.numpy as jnp
 
 logger = logging.getLogger(__name__)
 
@@ -122,11 +121,11 @@ async def configure_actuators(kos: pykos.KOS, robot_urdf_path: str, actuator_par
     """Configure actuators using parameters from files."""
     # Load the Feetech parameters
     sts3215_params, sts3250_params = load_feetech_params(actuator_params_path)
-    
+
     # Configure each actuator
     for ac in ACTUATOR_LIST:
         joint_name = ac.joint_name
-        
+
         # Determine parameter values based on joint type
         if "_15" in joint_name:
             max_torque = sts3215_params["max_torque"]
@@ -134,11 +133,11 @@ async def configure_actuators(kos: pykos.KOS, robot_urdf_path: str, actuator_par
             max_torque = sts3250_params["max_torque"]
         else:
             max_torque = ac.max_torque
-        
+
         # Use the predefined kp/kd values from ACTUATOR_LIST
         kp = ac.kp
         kd = ac.kd
-        
+
         # Configure the actuator through KOS API
         logger.info(f"Configuring actuator {ac.actuator_id} ({joint_name}): kp={kp}, kd={kd}, max_torque={max_torque}")
         await kos.actuator.configure_actuator(
@@ -193,12 +192,7 @@ def spawn_kos_sim(no_render: bool) -> tuple[subprocess.Popen, Callable]:
 
 
 async def main(
-    model_path: str, 
-    ip: str, 
-    no_render: bool, 
-    episode_length: int,
-    robot_urdf_path: str,
-    actuator_params_path: str
+    model_path: str, ip: str, no_render: bool, episode_length: int, robot_urdf_path: str, actuator_params_path: str
 ) -> None:
     model = tf.saved_model.load(model_path)
     sim_process = None
@@ -295,19 +289,19 @@ if __name__ == "__main__":
     parser.add_argument("--episode_length", type=int, default=5)  # seconds
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--log-file", type=str, help="Path to write log output")
-    
+
     # Add arguments to mirror standing.py configuration
     parser.add_argument(
-        "--robot_urdf_path", 
-        type=str, 
+        "--robot_urdf_path",
+        type=str,
         default="ksim_zbot/kscale-assets/zbot-6dof-feet/",
-        help="The path to the assets directory for the robot."
+        help="The path to the assets directory for the robot.",
     )
     parser.add_argument(
-        "--actuator_params_path", 
-        type=str, 
+        "--actuator_params_path",
+        type=str,
         default="ksim_zbot/kscale-assets/actuators/feetech/",
-        help="The path to the assets directory for feetech actuator models"
+        help="The path to the assets directory for feetech actuator models",
     )
     args = parser.parse_args()
 
@@ -325,11 +319,13 @@ if __name__ == "__main__":
     else:
         logging.basicConfig(level=log_level, format=log_format)
 
-    asyncio.run(main(
-        args.model_path, 
-        args.ip, 
-        args.no_render, 
-        args.episode_length,
-        args.robot_urdf_path,
-        args.actuator_params_path
-    ))
+    asyncio.run(
+        main(
+            args.model_path,
+            args.ip,
+            args.no_render,
+            args.episode_length,
+            args.robot_urdf_path,
+            args.actuator_params_path,
+        )
+    )
