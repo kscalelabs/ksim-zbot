@@ -635,9 +635,14 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
                 else:
                     raise ValueError(f"Invalid joint name: {joint_name}")
 
+                if joint_meta.kp is None:
+                    raise ValueError(f"kp is not available for joint {joint_name}")
+                if joint_meta.kd is None:
+                    raise ValueError(f"kd is not available for joint {joint_name}")
+
                 try:
-                    kp_val = float(joint_meta.kp) if joint_meta.kp is not None else 0.0
-                    kd_val = float(joint_meta.kd) if joint_meta.kd is not None else 0.0
+                    kp_val = float(joint_meta.kp)
+                    kd_val = float(joint_meta.kd)
                 except ValueError as e:
                     raise ValueError(f"Could not convert kp/kd gains to a float for joint {joint_name}: {e}")
 

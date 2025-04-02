@@ -15,6 +15,8 @@ import ksim
 import mujoco
 import optax
 import xax
+import logging
+import colorlogging
 from jaxtyping import Array, PRNGKeyArray
 from kscale.web.gen.api import JointMetadataOutput
 from mujoco import mjx
@@ -30,6 +32,8 @@ from .standing import (
     HistoryObservation,
     LastActionObservation,
 )
+
+logger = logging.getLogger(__name__)
 
 # Constants for history handling
 HISTORY_LENGTH = 0
@@ -325,6 +329,11 @@ class ZbotWalkingTaskConfig(ksim.PPOConfig):
         help="Whether to export the model for inference.",
     )
 
+    render_distance: float = xax.field(
+        value=1.5,
+        help="The distance to the render camera from the robot.",
+    )
+
 
 Config = TypeVar("Config", bound=ZbotWalkingTaskConfig)
 
@@ -481,9 +490,16 @@ class ZbotWalkingTask(ksim.PPOTask[ZbotWalkingTaskConfig], Generic[Config]):
                 else:
                     raise ValueError(f"Invalid joint name: {joint_name}")
 
+                if joint_meta.kp is None:
+                    raise ValueError(f"kp is not available for joint {joint_name}")
+                if joint_meta.kd is None:
+                    raise ValueError(f"kd is not available for joint {joint_name}")
+
+                logger.info(f"For joint {joint_name}, id: {i}, kp: {joint_meta.kp}, kd: {joint_meta.kd}")
+
                 try:
-                    kp_val = float(joint_meta.kp) if joint_meta.kp is not None else 0.0
-                    kd_val = float(joint_meta.kd) if joint_meta.kd is not None else 0.0
+                    kp_val = float(joint_meta.kp)
+                    kd_val = float(joint_meta.kd)
                 except ValueError as e:
                     raise ValueError(f"Could not convert kp/kd gains to a float for joint {joint_name}: {e}")
 
@@ -783,8 +799,8 @@ if __name__ == "__main__":
             ctrl_dt=0.02,
             max_action_latency=0.005,
             min_action_latency=0.0,
-            valid_every_n_steps=5,
-            valid_first_n_steps=0,
+            log_full_trajectory_every_n_steps=20,
+            log_full_trajectory_on_first_step=True,
             save_every_n_steps=5,
             rollout_length_seconds=5.0,
             # PPO parameters
