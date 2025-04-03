@@ -317,13 +317,13 @@ if __name__ == "__main__":
     else:
         logging.basicConfig(level=log_level, format=log_format)
 
-    logger.info(f"Starting deployment with model: {args.model_path}")
-    logger.info(f"Episode length: {args.episode_length}")
-    logger.info(f"No render: {args.no_render}")
-    logger.info(f"Robot URDF path: {args.robot_urdf_path}")
-    logger.info(f"Actuator params path: {args.actuator_params_path}")
-    logger.info(f"IP: {args.ip}")
-    logger.info(f"Debug: {args.debug}")
+    logger.info("Starting deployment with model: %s", args.model_path)
+    logger.info("Episode length: %s", args.episode_length)
+    logger.info("No render: %s", args.no_render)
+    logger.info("Robot URDF path: %s", args.robot_urdf_path)
+    logger.info("Actuator params path: %s", args.actuator_params_path)
+    logger.info("IP: %s", args.ip)
+    logger.info("Debug: %s", args.debug)
 
     asyncio.run(
         main(
