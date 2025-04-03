@@ -245,7 +245,7 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
 
         # Apply servo-specific parameters based on joint name suffix
         for i in range(mj_model.njnt):
-            joint_name = mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_jOINT, i)
+            joint_name = mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_JOINT, i)
             if joint_name is None or not any(suffix in joint_name for suffix in ["_15", "_50"]):
                 continue
 
@@ -487,7 +487,6 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
     ) -> tuple[Array, Array, AuxOutputs]:
         raise NotImplementedError()
 
-    @abc.abstractmethod
     def make_export_model(self, model: ZbotModel, stochastic: bool = False, batched: bool = False) -> Callable:
         """Makes a callable inference function that directly takes a flattened input vector and returns an action.
 
@@ -521,7 +520,6 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
 
         return model_fn
 
-    @abc.abstractmethod
     def on_after_checkpoint_save(self, ckpt_path: Path, state: xax.State) -> xax.State:
         state = super().on_after_checkpoint_save(ckpt_path, state)
 
