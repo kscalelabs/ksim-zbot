@@ -13,6 +13,8 @@ import mujoco
 import optax
 import xax
 from jaxtyping import Array, PRNGKeyArray
+from ksim.observation import ObservationState
+from ksim.types import PhysicsState
 from mujoco import mjx
 from xax.utils.types.frozen_dict import FrozenDict
 
@@ -33,7 +35,7 @@ Config = TypeVar("Config", bound="ZbotStandingTaskConfig")
 
 @attrs.define(frozen=True)
 class HistoryObservation(ksim.Observation):
-    def observe(self, state: ksim.RolloutVariables, rng: PRNGKeyArray) -> Array:
+    def observe(self, state: ObservationState, rng: PRNGKeyArray) -> Array:
         if not isinstance(state.carry, Array):
             raise ValueError("Carry is not a history array")
         return state.carry
@@ -60,12 +62,12 @@ class JointPositionObservation(ksim.Observation):
         default=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     )
 
-    def observe(self, rollout_state: ksim.RolloutVariables, rng: PRNGKeyArray) -> Array:
-        qpos = rollout_state.physics_state.data.qpos[7:]  # (N,)
+    def observe(self, state: ObservationState, rng: PRNGKeyArray) -> Array:
+        qpos = state.physics_state.data.qpos[7:]  # (N,)
         diff = qpos - jnp.array(self.default_targets)
         return diff
 
-    def add_noise(self, observation: Array, rng: PRNGKeyArray) -> Array:
+    def add_noise(self, observation: Array, curriculum_level: Array, rng: PRNGKeyArray) -> Array:
         return observation + jax.random.normal(rng, observation.shape) * self.noise
 
 
@@ -73,10 +75,10 @@ class JointPositionObservation(ksim.Observation):
 class LastActionObservation(ksim.Observation):
     noise: float = attrs.field(default=0.0)
 
-    def observe(self, rollout_state: ksim.RolloutVariables, rng: PRNGKeyArray) -> Array:
-        return rollout_state.physics_state.most_recent_action
+    def observe(self, state: ObservationState, rng: PRNGKeyArray) -> Array:
+        return state.physics_state.most_recent_action
 
-    def add_noise(self, observation: Array, rng: PRNGKeyArray) -> Array:
+    def add_noise(self, observation: Array, curriculum_level: Array, rng: PRNGKeyArray) -> Array:
         return observation + jax.random.normal(rng, observation.shape) * self.noise
 
 
@@ -84,42 +86,12 @@ class LastActionObservation(ksim.Observation):
 class ResetDefaultJointPosition(ksim.Reset):
     """Resets the joint positions of the robot to random values."""
 
-    default_targets: tuple[float, ...] = attrs.field(
-        default=(
-            # xyz
-            0.0,
-            0.0,
-            0.41,  # This is the starting height (Z coordinate)
-            # quat
-            1.0,
-            0.0,
-            0.0,
-            0.0,
-            # qpos - 20 elements for zbot-6dof-feet's joint positions
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-        )
-    )
+    default_targets: tuple[float, ...] | None = attrs.field(default=None)
 
-    def __call__(self, data: ksim.PhysicsData, rng: PRNGKeyArray) -> ksim.PhysicsData:
+    def __call__(self, data: ksim.PhysicsData, curriculum_level: Array, rng: PRNGKeyArray) -> ksim.PhysicsData:
+        if self.default_targets is None:
+            return data
+        
         qpos = data.qpos
         match type(data):
             case mujoco.MjData:
@@ -439,8 +411,8 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
             ),
             ksim.JointVelocityObservation(noise=0.5),
             ksim.ActuatorForceObservation(),
-            ksim.SensorObservation.create(physics_model, "imu_acc", noise=0.5),
-            ksim.SensorObservation.create(physics_model, "imu_gyro", noise=0.2),
+            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="imu_acc", noise=0.5),
+            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="imu_gyro", noise=0.2),
             LastActionObservation(noise=0.0),
             HistoryObservation(),
         ]
@@ -495,8 +467,9 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
             DHHealthyReward(scale=0.5),
             ksim.ActuatorForcePenalty(scale=-0.01),
             ksim.BaseHeightReward(scale=1.0, height_target=0.4),
-            ksim.LinearVelocityTrackingPenalty(command_name="linear_velocity_step_command", scale=-0.05),
-            ksim.AngularVelocityTrackingPenalty(command_name="angular_velocity_step_command", scale=-0.05),
+            ksim.LinearVelocityTrackingReward(index="x", command_name="linear_velocity_step_command", scale=-0.05),
+            ksim.LinearVelocityTrackingReward(index="y", command_name="linear_velocity_step_command", scale=-0.05),
+            ksim.AngularVelocityTrackingReward(index="z", command_name="angular_velocity_step_command", scale=-0.05),
             # FeetSlipPenalty(scale=-0.01),
             # ksim.ActionSmoothnessPenalty(scale=-0.01),
         ]
@@ -599,6 +572,7 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
         model: ZbotModel,
         carry: Array,
         physics_model: ksim.PhysicsModel,
+        physics_state: PhysicsState,
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
         rng: PRNGKeyArray,

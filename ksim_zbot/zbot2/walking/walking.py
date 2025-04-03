@@ -12,6 +12,8 @@ import ksim
 import optax
 import xax
 from jaxtyping import Array, PRNGKeyArray
+from ksim.observation import ObservationState
+from ksim.types import PhysicsState
 from xax.utils.types.frozen_dict import FrozenDict
 
 from ksim_zbot.zbot2.common import AuxOutputs, ZbotTask, ZbotTaskConfig
@@ -44,7 +46,7 @@ NUM_OUTPUTS = 20
 
 @attrs.define(frozen=True)
 class HistoryObservation(ksim.Observation):
-    def observe(self, state: ksim.RolloutVariables, rng: PRNGKeyArray) -> Array:
+    def observe(self, state: ObservationState, rng: PRNGKeyArray) -> Array:
         if not isinstance(state.carry, Array):
             raise ValueError("Carry is not a history array")
         return state.carry
@@ -54,10 +56,10 @@ class HistoryObservation(ksim.Observation):
 class LastActionObservation(ksim.Observation):
     noise: float = attrs.field(default=0.0)
 
-    def observe(self, rollout_state: ksim.RolloutVariables, rng: PRNGKeyArray) -> Array:
-        return rollout_state.physics_state.most_recent_action
+    def observe(self, state: ObservationState, rng: PRNGKeyArray) -> Array:
+        return state.physics_state.most_recent_action
 
-    def add_noise(self, observation: Array, rng: PRNGKeyArray) -> Array:
+    def add_noise(self, observation: Array, curriculum_level: Array, rng: PRNGKeyArray) -> Array:
         return observation + jax.random.normal(rng, observation.shape) * self.noise
 
 
@@ -102,11 +104,11 @@ class HeightReward(ksim.Reward):
 class DHJointVelocityObservation(ksim.Observation):
     noise: float = attrs.field(default=0.0)
 
-    def observe(self, rollout_state: ksim.RolloutVariables, rng: PRNGKeyArray) -> Array:
-        qvel = rollout_state.physics_state.data.qvel[6:]  # (N,)
+    def observe(self, state: ObservationState, rng: PRNGKeyArray) -> Array:
+        qvel = state.physics_state.data.qvel[6:]  # (N,)
         return qvel
 
-    def add_noise(self, observation: Array, rng: PRNGKeyArray) -> Array:
+    def add_noise(self, observation: Array, curriculum_level: Array, rng: PRNGKeyArray) -> Array:
         return observation + jax.random.normal(rng, observation.shape) * self.noise
 
 
@@ -114,11 +116,11 @@ class DHJointVelocityObservation(ksim.Observation):
 class DHJointPositionObservation(ksim.Observation):
     noise: float = attrs.field(default=0.0)
 
-    def observe(self, rollout_state: ksim.RolloutVariables, rng: PRNGKeyArray) -> Array:
-        qpos = rollout_state.physics_state.data.qpos[7:]  # (N,)
+    def observe(self, state: ObservationState, rng: PRNGKeyArray) -> Array:
+        qpos = state.physics_state.data.qpos[7:]  # (N,)
         return qpos
 
-    def add_noise(self, observation: Array, rng: PRNGKeyArray) -> Array:
+    def add_noise(self, observation: Array, curriculum_level: Array, rng: PRNGKeyArray) -> Array:
         return observation + jax.random.normal(rng, observation.shape) * self.noise
 
 
@@ -344,8 +346,8 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         return [
             DHJointPositionObservation(),
             DHJointVelocityObservation(),
-            ksim.SensorObservation.create(physics_model, "imu_acc", noise=0.5),
-            ksim.SensorObservation.create(physics_model, "imu_gyro", noise=0.2),
+            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="imu_acc", noise=0.5),
+            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="imu_gyro", noise=0.2),
             LastActionObservation(noise=0.0),
             HistoryObservation(),
         ]
@@ -504,6 +506,7 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         model: ZbotModel,
         carry: Array,
         physics_model: ksim.PhysicsModel,
+        physics_state: PhysicsState,
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
         rng: PRNGKeyArray,

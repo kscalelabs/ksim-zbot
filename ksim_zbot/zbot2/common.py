@@ -19,7 +19,7 @@ import xax
 from jaxtyping import Array, PRNGKeyArray
 from kscale.web.gen.api import JointMetadataOutput
 from ksim.actuators import Actuators, NoiseType
-from ksim.types import PhysicsData
+from ksim.types import PhysicsData, PhysicsState
 from mujoco import mjx
 from mujoco_scenes.mjcf import load_mjmodel
 from scipy.interpolate import CubicSpline
@@ -481,6 +481,7 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
         model: ZbotModel,
         carry: Array,
         physics_model: ksim.PhysicsModel,
+        physics_state: PhysicsState,
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
         rng: PRNGKeyArray,
