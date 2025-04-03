@@ -1,8 +1,8 @@
 """Common definitions and utilities for Z-Bot tasks."""
 
 import abc
-import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Generic, TypedDict, TypeVar
@@ -17,7 +17,6 @@ import numpy as np
 import optax
 import xax
 from jaxtyping import Array, PRNGKeyArray
-from kscale.web.gen.api import JointMetadataOutput
 from ksim.actuators import Actuators, NoiseType
 from ksim.types import PhysicsData, PhysicsState
 from mujoco import mjx
@@ -25,6 +24,8 @@ from mujoco_scenes.mjcf import load_mjmodel
 from scipy.interpolate import CubicSpline
 from xax.nn.export import export
 from xax.utils.types.frozen_dict import FrozenDict
+
+logger = logging.getLogger(__name__)
 
 
 @jax.tree_util.register_dataclass
@@ -288,11 +289,30 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
 
         return mj_model
 
-    def get_mujoco_model_metadata(self, mj_model: mujoco.MjModel) -> dict[str, JointMetadataOutput]:
-        metadata = asyncio.run(ksim.get_mujoco_model_metadata(self.config.robot_urdf_path, cache=False))
-        if metadata.joint_name_to_metadata is None:
-            raise ValueError("Joint metadata is not available")
-        return metadata.joint_name_to_metadata
+    def get_mujoco_model_metadata(self, mj_model: mujoco.MjModel) -> dict[str, dict]:
+        # metadata = asyncio.run(ksim.get_mujoco_model_metadata(self.config.robot_urdf_path, cache=False))
+        # if metadata.joint_name_to_metadata is None:
+        #     raise ValueError("Joint metadata is not available")
+        # return metadata.joint_name_to_metadata
+
+        metadata_path = Path(self.config.robot_urdf_path) / "metadata.json"
+        if not metadata_path.exists():
+            raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
+
+        try:
+            with open(metadata_path, "r") as f:
+                raw_metadata = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Error decoding JSON from {metadata_path}: {e}")
+
+        if "joint_name_to_metadata" not in raw_metadata:
+            raise ValueError(f"'joint_name_to_metadata' key missing in {metadata_path}")
+
+        joint_metadata = raw_metadata["joint_name_to_metadata"]
+        if not isinstance(joint_metadata, dict):
+            raise TypeError(f"'joint_name_to_metadata' in {metadata_path} must be a dictionary.")
+
+        return joint_metadata
 
     def _load_feetech_params(self) -> dict[str, FeetechParams]:
         params_path = Path(self.config.actuator_params_path)
@@ -320,7 +340,7 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
     def get_actuators(
         self,
         physics_model: ksim.PhysicsModel,
-        metadata: dict[str, JointMetadataOutput] | None = None,
+        metadata: dict[str, dict] | None = None,
     ) -> ksim.Actuators:
         if metadata is not None:
             joint_names = sorted(metadata.keys())
@@ -350,28 +370,46 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
 
             for i, joint_name in enumerate(joint_names):
                 joint_meta = metadata[joint_name]
-                if "_15" in joint_name:
+                if not isinstance(joint_meta, dict):
+                    raise TypeError(f"Metadata entry for joint '{joint_name}' must be a dictionary.")
+                if "actuator_type" not in joint_meta:
+                    raise ValueError(f"'actuator_type' is not available for joint {joint_name}")
+
+                actuator_type = joint_meta["actuator_type"]
+                if not isinstance(actuator_type, str):
+                    raise TypeError(f"'actuator_type' for joint {joint_name} must be a string.")
+
+                if "sts3215" in actuator_type:
                     max_torque_j = max_torque_j.at[i].set(sts3215_params["max_torque"])
                     error_gain_data_list_j.append(sts3215_params["error_gain_data"])
-                elif "_50" in joint_name:
+                elif "sts3250" in actuator_type:
                     max_torque_j = max_torque_j.at[i].set(sts3250_params["max_torque"])
                     error_gain_data_list_j.append(sts3250_params["error_gain_data"])
                 else:
-                    raise ValueError(f"Invalid joint name: {joint_name}")
+                    raise ValueError(f"Unknown or unsupported actuator type '{actuator_type}' for joint {joint_name}")
 
-                if joint_meta.kp is None:
-                    raise ValueError(f"kp is not available for joint {joint_name}")
-                if joint_meta.kd is None:
-                    raise ValueError(f"kd is not available for joint {joint_name}")
+                if "kp" not in joint_meta:
+                    raise ValueError(f"'kp' is not available for joint {joint_name}")
+                if "kd" not in joint_meta:
+                    raise ValueError(f"'kd' is not available for joint {joint_name}")
 
                 try:
-                    kp_val = float(joint_meta.kp)
-                    kd_val = float(joint_meta.kd)
-                except ValueError as e:
+                    kp_val = float(joint_meta["kp"])
+                    kd_val = float(joint_meta["kd"])
+                except (ValueError, TypeError) as e:
                     raise ValueError(f"Could not convert kp/kd gains to a float for joint {joint_name}: {e}")
 
                 kp_j = kp_j.at[i].set(kp_val)
                 kd_j = kd_j.at[i].set(kd_val)
+
+                logger.info(
+                    "joint %s, id: %d, actuator_type: %s, kp=%f, kd=%f",
+                    joint_name,
+                    joint_meta["id"],
+                    actuator_type,
+                    kp_val,
+                    kd_val,
+                )
         else:
             raise ValueError("Metadata is not available")
         return FeetechActuators(
