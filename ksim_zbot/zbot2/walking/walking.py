@@ -14,7 +14,9 @@ import xax
 from jaxtyping import Array, PRNGKeyArray
 from ksim.observation import ObservationState
 from ksim.types import PhysicsState
+from ksim.curriculum import Curriculum, ConstantCurriculum
 from xax.utils.types.frozen_dict import FrozenDict
+from ksim.task.ppo import PPOVariables
 
 from ksim_zbot.zbot2.common import AuxOutputs, ZbotTask, ZbotTaskConfig
 
@@ -352,6 +354,11 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
             HistoryObservation(),
         ]
 
+    def get_curriculum(self, physics_model: ksim.PhysicsModel) -> Curriculum:
+        """Returns the curriculum for the task."""
+        # Using a constant curriculum (max difficulty) as a default
+        return ConstantCurriculum(level=1.0)
+
     def get_commands(self, physics_model: ksim.PhysicsModel) -> list[ksim.Command]:
         return [
             ksim.LinearVelocityStepCommand(
@@ -413,8 +420,8 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
 
         joint_pos_n = observations["dhjoint_position_observation"]
         joint_vel_n = observations["dhjoint_velocity_observation"]
-        imu_acc_3 = observations["imu_acc_obs"]
-        imu_gyro_3 = observations["imu_gyro_obs"]
+        imu_acc_3 = observations["sensor_observation_imu_acc"]
+        imu_gyro_3 = observations["sensor_observation_imu_gyro"]
         lin_vel_cmd_2 = commands["linear_velocity_step_command"]
         last_action_n = observations["last_action_observation"]
         history_n = observations["history_observation"]
@@ -443,8 +450,8 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
     ) -> Array:
         joint_pos_n = observations["dhjoint_position_observation"]
         joint_vel_n = observations["dhjoint_velocity_observation"]
-        imu_acc_3 = observations["imu_acc_obs"]
-        imu_gyro_3 = observations["imu_gyro_obs"]
+        imu_acc_3 = observations["sensor_observation_imu_acc"]
+        imu_gyro_3 = observations["sensor_observation_imu_gyro"]
         lin_vel_cmd_2 = commands["linear_velocity_step_command"]
         last_action_n = observations["last_action_observation"]
         history_n = observations["history_observation"]
@@ -468,7 +475,45 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
     ) -> Array:
         if trajectories.aux_outputs is None:
             raise ValueError("No aux outputs found in trajectories")
+        # Ensure aux_outputs has the expected structure
+        if not isinstance(trajectories.aux_outputs, AuxOutputs) or not hasattr(trajectories.aux_outputs, 'values'):
+            raise TypeError(f"Expected AuxOutputs with 'values', got {type(trajectories.aux_outputs)}")
         return trajectories.aux_outputs.values
+
+    def get_on_policy_variables(self, model: ZbotModel, trajectories: ksim.Trajectory, rng: PRNGKeyArray) -> PPOVariables:
+        """Gets PPO variables using the policy that generated the trajectory."""
+        if trajectories.aux_outputs is None:
+            raise ValueError("No aux outputs found in trajectories")
+        if not isinstance(trajectories.aux_outputs, AuxOutputs):
+            raise TypeError(f"Expected AuxOutputs, got {type(trajectories.aux_outputs)}")
+        if not hasattr(trajectories.aux_outputs, 'log_probs') or not hasattr(trajectories.aux_outputs, 'values'):
+            raise AttributeError("AuxOutputs object missing required attributes 'log_probs' or 'values'")
+
+        return PPOVariables(
+            log_probs_tn=trajectories.aux_outputs.log_probs,
+            values_t=trajectories.aux_outputs.values,
+        )
+
+    def get_off_policy_variables(self, model: ZbotModel, trajectories: ksim.Trajectory, rng: PRNGKeyArray) -> PPOVariables:
+        """Gets PPO variables using the current (potentially updated) policy."""
+        # Recalculate log_probs with the current model
+        par_actor_fn = jax.vmap(self._run_actor, in_axes=(None, 0, 0))
+        action_dist_btn = par_actor_fn(model, trajectories.obs, trajectories.command)
+        log_probs_tn = action_dist_btn.log_prob(trajectories.action)
+
+        # Recalculate values with the current model
+        par_critic_fn = jax.vmap(self._run_critic, in_axes=(None, 0, 0))
+        values_bt1 = par_critic_fn(model, trajectories.obs, trajectories.command)
+        values_t = values_bt1.squeeze(-1)
+
+        # Optionally compute entropy here if needed for entropy bonus
+        # entropy_tn = action_dist_btn.entropy()
+
+        return PPOVariables(
+            log_probs_tn=log_probs_tn,
+            values_t=values_t,
+            # entropy_tn=entropy_tn, # Uncomment if using entropy bonus
+        )
 
     def get_log_probs(
         self,
@@ -522,8 +567,8 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         if HISTORY_LENGTH > 0:
             joint_pos_n = observations["dhjoint_position_observation"]
             joint_vel_n = observations["dhjoint_velocity_observation"]
-            imu_acc_3 = observations["imu_acc_obs"]
-            imu_gyro_3 = observations["imu_gyro_obs"]
+            imu_acc_3 = observations["sensor_observation_imu_acc"]
+            imu_gyro_3 = observations["sensor_observation_imu_gyro"]
             lin_vel_cmd_2 = commands["linear_velocity_step_command"]
             last_action_n = observations["last_action_observation"]
 
