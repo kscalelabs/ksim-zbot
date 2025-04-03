@@ -2,7 +2,6 @@
 
 import logging
 from dataclasses import dataclass
-from typing import TypeVar
 
 import attrs
 import distrax
@@ -304,12 +303,9 @@ class ZbotWalkingTaskConfig(ZbotTaskConfig):
     )
 
 
-Config = TypeVar("Config", bound=ZbotWalkingTaskConfig)
-
-
-class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig]):
+class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
     @property
-    def model_input_shapes(self) -> list[tuple[int, ...]]:
+    def get_input_shapes(self) -> list[tuple[int, ...]]:
         return [(NUM_INPUTS,)]
 
     def get_optimizer(self) -> optax.GradientTransformation:

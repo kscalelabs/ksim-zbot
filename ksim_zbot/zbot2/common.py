@@ -34,10 +34,6 @@ class AuxOutputs:
     values: Array
 
 
-# Define the Config TypeVar for use with Generic
-Config = TypeVar("Config", bound="ZbotTaskConfig")
-
-
 @dataclass
 class ZbotTaskConfig(ksim.PPOConfig):
     """Config for the Z-Bot walking task."""
@@ -68,6 +64,9 @@ class ZbotTaskConfig(ksim.PPOConfig):
         value=1.5,
         help="The distance to the render camera from the robot.",
     )
+
+
+Config = TypeVar("Config", bound=ZbotTaskConfig)
 
 
 ErrorGainData = list[dict[str, float]]
@@ -157,7 +156,7 @@ class FeetechActuators(Actuators):
         self.torque_noise = torque_noise
         self.torque_noise_type = torque_noise_type
 
-    def _eval_spline(self, x_val_sat: Array, knots: Array, coeffs: Array, knot_count: int) -> Array:
+    def _eval_spline(self, x_val_sat: Array, knots: Array, coeffs: Array, knot_count: Array) -> Array:
         """Evaluate spline using SciPy format on potentially padded arrays (dynamic slice fix)."""
         search_result = jnp.searchsorted(knots, x_val_sat)
         idx = jnp.clip(search_result - 1, 0, knot_count - 2)
@@ -173,7 +172,7 @@ class FeetechActuators(Actuators):
         pos_error_j = action_j - current_pos_j
         vel_error_j = -current_vel_j
 
-        def process_single_joint(err: Array, k: Array, c: Array, kc: int, flag: bool, default_eg: float) -> Array:
+        def process_single_joint(err: Array, k: Array, c: Array, kc: Array, flag: Array, default_eg: Array) -> Array:
             abs_err = jnp.abs(err)
             x_clamped = jnp.clip(abs_err, k[0], k[kc - 1])  # Use knot_count 'kc' for safe indexing
 
@@ -181,7 +180,7 @@ class FeetechActuators(Actuators):
                 return self._eval_spline(x_clamped, k, c, kc)
 
             def default_gain_branch() -> Array:
-                return default_eg
+                return jnp.array(default_eg)
 
             result = jax.lax.cond(flag, eval_spline_branch, default_gain_branch)
             return result
@@ -207,17 +206,17 @@ class FeetechActuators(Actuators):
         return physics_data.qpos[7:]
 
 
-class ZbotTask(ksim.PPOTask[ZbotTaskConfig], Generic[Config]):
+ZbotModel = TypeVar("ZbotModel", bound=eqx.Module)
+
+
+class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
     @property
     @abc.abstractmethod
-    def model_input_shapes(self) -> list[tuple[int, ...]]:
-        """Returns a list of shapes expected by the exported model's inference function.
-
-        For MLP: [(num_inputs,)]
-        For LSTM: [(num_inputs,), (depth, 2, hidden_size)]
-        """
+    def get_input_shapes(self) -> list[tuple[int, ...]]:
+        """Returns a list of shapes expected by the exported model's inference function."""
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def get_optimizer(self) -> optax.GradientTransformation:
         raise NotImplementedError()
 
@@ -386,84 +385,100 @@ class ZbotTask(ksim.PPOTask[ZbotTaskConfig], Generic[Config]):
             torque_noise_type="none",
         )
 
+    @abc.abstractmethod
     def get_randomization(self, physics_model: ksim.PhysicsModel) -> list[ksim.Randomization]:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def get_resets(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reset]:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def get_events(self, physics_model: ksim.PhysicsModel) -> list[ksim.Event]:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def get_observations(self, physics_model: ksim.PhysicsModel) -> list[ksim.Observation]:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def get_commands(self, physics_model: ksim.PhysicsModel) -> list[ksim.Command]:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def get_rewards(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reward]:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def get_terminations(self, physics_model: ksim.PhysicsModel) -> list[ksim.Termination]:
         raise NotImplementedError()
 
-    def get_model(self, key: PRNGKeyArray) -> eqx.Module:
+    @abc.abstractmethod
+    def get_model(self, key: PRNGKeyArray) -> ZbotModel:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def get_initial_carry(self, rng: PRNGKeyArray) -> Array:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def _run_actor(
         self,
-        model: eqx.Module,
+        model: ZbotModel,
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
     ) -> distrax.Normal:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def _run_critic(
         self,
-        model: eqx.Module,
+        model: ZbotModel,
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
     ) -> Array:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def get_on_policy_log_probs(
         self,
-        model: eqx.Module,
+        model: ZbotModel,
         trajectories: ksim.Trajectory,
         rng: PRNGKeyArray,
     ) -> Array:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def get_on_policy_values(
         self,
-        model: eqx.Module,
+        model: ZbotModel,
         trajectories: ksim.Trajectory,
         rng: PRNGKeyArray,
     ) -> Array:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def get_log_probs(
         self,
-        model: eqx.Module,
+        model: ZbotModel,
         trajectories: ksim.Trajectory,
         rng: PRNGKeyArray,
     ) -> tuple[Array, Array]:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def get_values(
         self,
-        model: eqx.Module,
+        model: ZbotModel,
         trajectories: ksim.Trajectory,
         rng: PRNGKeyArray,
     ) -> Array:
         raise NotImplementedError()
 
+    @abc.abstractmethod
     def sample_action(
         self,
-        model: eqx.Module,
+        model: ZbotModel,
         carry: Array,
         physics_model: ksim.PhysicsModel,
         observations: FrozenDict[str, Array],
@@ -472,17 +487,23 @@ class ZbotTask(ksim.PPOTask[ZbotTaskConfig], Generic[Config]):
     ) -> tuple[Array, Array, AuxOutputs]:
         raise NotImplementedError()
 
-    def make_export_model(self, model: eqx.Module, stochastic: bool = False, batched: bool = False) -> Callable:
+    @abc.abstractmethod
+    def make_export_model(self, model: ZbotModel, stochastic: bool = False, batched: bool = False) -> Callable:
         """Makes a callable inference function that directly takes a flattened input vector and returns an action.
 
         Returns:
             A tuple containing the inference function and the size of the input vector.
         """
+        # Cast model to the expected type to satisfy MyPy
+        if not hasattr(model, "actor") or not hasattr(model.actor, "call_flat_obs"):
+            raise TypeError("Model passed to make_export_model must have actor with call_flat_obs method.")
 
         def deterministic_model_fn(obs: Array) -> Array:
+            # Use the cast model
             return model.actor.call_flat_obs(obs).mode()
 
         def stochastic_model_fn(obs: Array) -> Array:
+            # Use the cast model
             distribution = model.actor.call_flat_obs(obs)
             return distribution.sample(seed=jax.random.PRNGKey(0))
 
@@ -500,14 +521,15 @@ class ZbotTask(ksim.PPOTask[ZbotTaskConfig], Generic[Config]):
 
         return model_fn
 
+    @abc.abstractmethod
     def on_after_checkpoint_save(self, ckpt_path: Path, state: xax.State) -> xax.State:
         state = super().on_after_checkpoint_save(ckpt_path, state)
 
-        model: eqx.Module = self.load_checkpoint(ckpt_path, part="model")
+        model: ZbotModel = self.load_checkpoint(ckpt_path, part="model")
 
         model_fn = self.make_export_model(model, stochastic=False, batched=True)
 
-        input_shapes: list[tuple[int, ...]] = self.model_input_shapes
+        input_shapes: list[tuple[int, ...]] = self.get_input_shapes
 
         export(
             model_fn,
