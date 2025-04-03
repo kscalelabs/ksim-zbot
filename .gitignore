@@ -22,3 +22,7 @@ out*/
 
 # Training artifacts
 run_*/
+
+# env
+.venv/
+venv/

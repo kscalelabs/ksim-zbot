@@ -2,9 +2,11 @@
 
 import argparse
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pykos
@@ -57,6 +59,28 @@ ACTUATOR_LIST: list[Actuator] = [
 ]
 
 
+def load_feetech_params(actuator_params_path: str) -> tuple[dict, dict]:
+    """Load Feetech parameters from files."""
+    params_path = Path(actuator_params_path)
+    params_file_3215 = params_path / "sts3215_12v_params.json"
+    params_file_3250 = params_path / "sts3250_params.json"
+
+    if not params_file_3215.exists():
+        raise ValueError(
+            f"Feetech parameters file '{params_file_3215}' not found. Please ensure it exists in '{params_path}'."
+        )
+    if not params_file_3250.exists():
+        raise ValueError(
+            f"Feetech parameters file '{params_file_3250}' not found. Please ensure it exists in '{params_path}'."
+        )
+
+    with open(params_file_3215, "r") as f:
+        params_3215 = json.load(f)
+    with open(params_file_3250, "r") as f:
+        params_3250 = json.load(f)
+    return params_3215, params_3250
+
+
 async def get_observation(kos: pykos.KOS) -> np.ndarray:
     (actuator_states, imu) = await asyncio.gather(
         kos.actuator.get_actuators_state([ac.actuator_id for ac in ACTUATOR_LIST]),
@@ -98,14 +122,39 @@ async def send_actions(kos: pykos.KOS, position: np.ndarray, velocity: np.ndarra
     await kos.actuator.command_actuators(actuator_commands)
 
 
-async def configure_actuators(kos: pykos.KOS) -> None:
+async def configure_actuators(kos: pykos.KOS, robot_urdf_path: str, actuator_params_path: str) -> None:
+    """Configure actuators using parameters from files."""
+    # Load the Feetech parameters
+    sts3215_params, sts3250_params = load_feetech_params(actuator_params_path)
+
+    # Configure each actuator
     for ac in ACTUATOR_LIST:
+        joint_name = ac.joint_name
+
+        # Determine parameter values based on joint type
+        if "_03" in joint_name:  # Assuming _03 corresponds to STS3215
+            max_torque = sts3215_params["max_torque"]
+        elif "_04" in joint_name:  # Assuming _04 corresponds to STS3250
+            max_torque = sts3250_params["max_torque"]
+        elif "_02" in joint_name:  # Smaller actuators
+            max_torque = ac.max_torque
+        else:
+            max_torque = ac.max_torque
+
+        # Use the predefined kp/kd values from ACTUATOR_LIST
+        kp = ac.kp
+        kd = ac.kd
+
+        # Configure the actuator through KOS API
+        logger.info(
+            "Configuring actuator %d (%s): kp=%f, kd=%f, max_torque=%f", ac.actuator_id, joint_name, kp, kd, max_torque
+        )
         await kos.actuator.configure_actuator(
             actuator_id=ac.actuator_id,
-            kp=ac.kp,
-            kd=ac.kd,
+            kp=kp,
+            kd=kd,
             torque_enabled=True,
-            max_torque=ac.max_torque,
+            max_torque=max_torque,
         )
 
 
@@ -130,13 +179,13 @@ async def disable(kos: pykos.KOS) -> None:
         )
 
 
-async def main(model_path: str, ip: str, episode_length: int) -> None:
+async def main(model_path: str, ip: str, episode_length: int, robot_urdf_path: str, actuator_params_path: str) -> None:
     model = tf.saved_model.load(model_path)
     kos = pykos.KOS(ip=ip)
     await disable(kos)
     time.sleep(1)
     logger.info("Configuring actuators...")
-    await configure_actuators(kos)
+    await configure_actuators(kos, robot_urdf_path, actuator_params_path)
     await asyncio.sleep(1)
     logger.info("Resetting...")
     await reset(kos)
@@ -191,7 +240,22 @@ if __name__ == "__main__":
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--ip", type=str, default="localhost")
     parser.add_argument("--episode_length", type=int, default=60)  # seconds
+
+    # Add arguments to mirror standing.py configuration
+    parser.add_argument(
+        "--robot_urdf_path",
+        type=str,
+        default="ksim_zbot/kscale-assets/zbot-6dof-feet/",
+        help="The path to the assets directory for the robot.",
+    )
+    parser.add_argument(
+        "--actuator_params_path",
+        type=str,
+        default="ksim_zbot/kscale-assets/actuators/feetech/",
+        help="The path to the assets directory for feetech actuator models",
+    )
+
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
-    asyncio.run(main(args.model_path, args.ip, args.episode_length))
+    asyncio.run(main(args.model_path, args.ip, args.episode_length, args.robot_urdf_path, args.actuator_params_path))
