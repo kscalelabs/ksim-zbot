@@ -12,11 +12,11 @@ import ksim
 import optax
 import xax
 from jaxtyping import Array, PRNGKeyArray
+from ksim.curriculum import ConstantCurriculum, Curriculum
 from ksim.observation import ObservationState
-from ksim.types import PhysicsState
-from ksim.curriculum import Curriculum, ConstantCurriculum
-from xax.utils.types.frozen_dict import FrozenDict
 from ksim.task.ppo import PPOVariables
+from ksim.types import PhysicsState
+from xax.utils.types.frozen_dict import FrozenDict
 
 from ksim_zbot.zbot2.common import AuxOutputs, ZbotTask, ZbotTaskConfig
 
@@ -476,17 +476,19 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         if trajectories.aux_outputs is None:
             raise ValueError("No aux outputs found in trajectories")
         # Ensure aux_outputs has the expected structure
-        if not isinstance(trajectories.aux_outputs, AuxOutputs) or not hasattr(trajectories.aux_outputs, 'values'):
+        if not isinstance(trajectories.aux_outputs, AuxOutputs) or not hasattr(trajectories.aux_outputs, "values"):
             raise TypeError(f"Expected AuxOutputs with 'values', got {type(trajectories.aux_outputs)}")
         return trajectories.aux_outputs.values
 
-    def get_on_policy_variables(self, model: ZbotModel, trajectories: ksim.Trajectory, rng: PRNGKeyArray) -> PPOVariables:
+    def get_on_policy_variables(
+        self, model: ZbotModel, trajectories: ksim.Trajectory, rng: PRNGKeyArray
+    ) -> PPOVariables:
         """Gets PPO variables using the policy that generated the trajectory."""
         if trajectories.aux_outputs is None:
             raise ValueError("No aux outputs found in trajectories")
         if not isinstance(trajectories.aux_outputs, AuxOutputs):
             raise TypeError(f"Expected AuxOutputs, got {type(trajectories.aux_outputs)}")
-        if not hasattr(trajectories.aux_outputs, 'log_probs') or not hasattr(trajectories.aux_outputs, 'values'):
+        if not hasattr(trajectories.aux_outputs, "log_probs") or not hasattr(trajectories.aux_outputs, "values"):
             raise AttributeError("AuxOutputs object missing required attributes 'log_probs' or 'values'")
 
         return PPOVariables(
@@ -494,7 +496,9 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
             values_t=trajectories.aux_outputs.values,
         )
 
-    def get_off_policy_variables(self, model: ZbotModel, trajectories: ksim.Trajectory, rng: PRNGKeyArray) -> PPOVariables:
+    def get_off_policy_variables(
+        self, model: ZbotModel, trajectories: ksim.Trajectory, rng: PRNGKeyArray
+    ) -> PPOVariables:
         """Gets PPO variables using the current (potentially updated) policy."""
         # Recalculate log_probs with the current model
         par_actor_fn = jax.vmap(self._run_actor, in_axes=(None, 0, 0))

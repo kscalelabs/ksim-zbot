@@ -91,7 +91,7 @@ class ResetDefaultJointPosition(ksim.Reset):
     def __call__(self, data: ksim.PhysicsData, curriculum_level: Array, rng: PRNGKeyArray) -> ksim.PhysicsData:
         if self.default_targets is None:
             return data
-        
+
         qpos = data.qpos
         match type(data):
             case mujoco.MjData:
