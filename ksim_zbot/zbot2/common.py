@@ -90,30 +90,30 @@ class FeetechActuators(Actuators):
 
     def __init__(
         self,
-        max_torque_J: Array,
-        kp_J: Array,
-        kd_J: Array,
-        error_gain_data_J: list[ErrorGainData],  # Mandatory
+        max_torque_j: Array,
+        kp_j: Array,
+        kd_j: Array,
+        error_gain_data_j: list[ErrorGainData],  # Mandatory
         action_noise: float = 0.0,
         action_noise_type: NoiseType = "none",
         torque_noise: float = 0.0,
         torque_noise_type: NoiseType = "none",
     ) -> None:
-        self.max_torque_J = max_torque_J
-        self.kp_J = kp_J
-        self.kd_J = kd_J
-        J = kp_J.shape[0]  # num outputs
+        self.max_torque_j = max_torque_j
+        self.kp_j = kp_j
+        self.kd_j = kd_j
+        j = kp_j.shape[0]  # num outputs
 
-        if len(error_gain_data_J) != J:
+        if len(error_gain_data_j) != j:
             raise ValueError(
-                f"Length of error_gain_data ({len(error_gain_data_J)}) must match number of actuators ({J})."
+                f"Length of error_gain_data ({len(error_gain_data_j)}) must match number of actuators ({j})."
             )
 
-        temp_knots_J: list[np.ndarray] = []
-        temp_coeffs_J: list[np.ndarray] = []
-        knot_counts_J: list[int] = []
+        temp_knots_j: list[np.ndarray] = []
+        temp_coeffs_j: list[np.ndarray] = []
+        knot_counts_j: list[int] = []
 
-        for i, ed in enumerate(error_gain_data_J):
+        for i, ed in enumerate(error_gain_data_j):
             # Checks for valid error_gain_data
             if ed is None or len(ed) < 3:
                 raise ValueError(f"Actuator {i}: Not enough error_gain_data.")
@@ -130,30 +130,28 @@ class FeetechActuators(Actuators):
             if knots.size < 2:
                 raise ValueError(f"Actuator {i}: Spline fitting < 2 knots.")
 
-            temp_knots_J.append(knots)
-            temp_coeffs_J.append(coeffs)
-            knot_counts_J.append(knots.size)
+            temp_knots_j.append(knots)
+            temp_coeffs_j.append(coeffs)
+            knot_counts_j.append(knots.size)
 
-        max_num_knots = max(knot_counts_J) if knot_counts_J else 0        
+        max_num_knots = max(knot_counts_j) if knot_counts_j else 0
         max_num_coeffs_intervals = max_num_knots - 1
         knot_padding_value = jnp.inf
         coeff_padding_value = jnp.nan
 
         # Stack values into jnp arrays
-        self.stacked_knots = jnp.full((J, max_num_knots), knot_padding_value, dtype=jnp.float32)
-        self.stacked_coeffs = jnp.full(
-            (J, 4, max_num_coeffs_intervals), coeff_padding_value, dtype=jnp.float32
-        )
-        self.knot_counts = jnp.array(knot_counts_J, dtype=jnp.int32)
-        for i in range(J):
-            k = temp_knots_J[i]
-            c = temp_coeffs_J[i]
-            count = knot_counts_J[i]
+        self.stacked_knots = jnp.full((j, max_num_knots), knot_padding_value, dtype=jnp.float32)
+        self.stacked_coeffs = jnp.full((j, 4, max_num_coeffs_intervals), coeff_padding_value, dtype=jnp.float32)
+        self.knot_counts = jnp.array(knot_counts_j, dtype=jnp.int32)
+        for i in range(j):
+            k = temp_knots_j[i]
+            c = temp_coeffs_j[i]
+            count = knot_counts_j[i]
             self.stacked_knots = self.stacked_knots.at[i, :count].set(jnp.array(k))
             self.stacked_coeffs = self.stacked_coeffs.at[i, :, : (count - 1)].set(jnp.array(c))
-        
-        self.has_spline_data_flags = jnp.ones(J, dtype=bool)
-        self.default_error_gain = jnp.ones(J, dtype=jnp.float32)
+
+        self.has_spline_data_flags = jnp.ones(j, dtype=bool)
+        self.default_error_gain = jnp.ones(j, dtype=jnp.float32)
         self.action_noise = action_noise
         self.action_noise_type = action_noise_type
         self.torque_noise = torque_noise
@@ -167,13 +165,13 @@ class FeetechActuators(Actuators):
         spline_value = coeffs[0, idx] * dx**3 + coeffs[1, idx] * dx**2 + coeffs[2, idx] * dx + coeffs[3, idx]
         return spline_value
 
-    def get_ctrl(self, action_J: Array, physics_data: PhysicsData, rng: PRNGKeyArray) -> Array:
+    def get_ctrl(self, action_j: Array, physics_data: PhysicsData, rng: PRNGKeyArray) -> Array:
         """Compute torque control using Feetech parameters and mandatory cubic spline (JAX friendly)."""
         pos_rng, tor_rng = jax.random.split(rng)
-        current_pos_J = physics_data.qpos[7:]
-        current_vel_J = physics_data.qvel[6:]
-        pos_error_J = action_J - current_pos_J
-        vel_error_J = -current_vel_J
+        current_pos_j = physics_data.qpos[7:]
+        current_vel_j = physics_data.qvel[6:]
+        pos_error_j = action_j - current_pos_j
+        vel_error_j = -current_vel_j
 
         def process_single_joint(err: Array, k: Array, c: Array, kc: int, flag: bool, default_eg: float) -> Array:
             abs_err = jnp.abs(err)
@@ -188,8 +186,8 @@ class FeetechActuators(Actuators):
             result = jax.lax.cond(flag, eval_spline_branch, default_gain_branch)
             return result
 
-        error_gain_J = jax.vmap(process_single_joint)(
-            pos_error_J,
+        error_gain_j = jax.vmap(process_single_joint)(
+            pos_error_j,
             self.stacked_knots,
             self.stacked_coeffs,
             self.knot_counts,
@@ -197,13 +195,13 @@ class FeetechActuators(Actuators):
             self.default_error_gain,
         )
 
-        duty_J = self.kp_J * error_gain_J * pos_error_J + self.kd_J * vel_error_J
-        torque_J = jnp.clip(
-            self.add_noise(self.torque_noise, self.torque_noise_type, duty_J * self.max_torque_J, tor_rng),
-            -self.max_torque_J,
-            self.max_torque_J,
+        duty_j = self.kp_j * error_gain_j * pos_error_j + self.kd_j * vel_error_j
+        torque_j = jnp.clip(
+            self.add_noise(self.torque_noise, self.torque_noise_type, duty_j * self.max_torque_j, tor_rng),
+            -self.max_torque_j,
+            self.max_torque_j,
         )
-        return torque_J
+        return torque_j
 
     def get_default_action(self, physics_data: PhysicsData) -> Array:
         return physics_data.qpos[7:]
@@ -248,7 +246,7 @@ class ZbotTask(ksim.PPOTask[ZbotTaskConfig], Generic[Config]):
 
         # Apply servo-specific parameters based on joint name suffix
         for i in range(mj_model.njnt):
-            joint_name = mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_JOINT, i)
+            joint_name = mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_jOINT, i)
             if joint_name is None or not any(suffix in joint_name for suffix in ["_15", "_50"]):
                 continue
 
@@ -329,9 +327,9 @@ class ZbotTask(ksim.PPOTask[ZbotTaskConfig], Generic[Config]):
             joint_names = sorted(metadata.keys())
 
             num_joints = len(joint_names)
-            max_torque_J = jnp.zeros(num_joints)
-            kp_J = jnp.zeros(num_joints)
-            kd_J = jnp.zeros(num_joints)
+            max_torque_j = jnp.zeros(num_joints)
+            kp_j = jnp.zeros(num_joints)
+            kd_j = jnp.zeros(num_joints)
 
             feetech_params_dict = self._load_feetech_params()
             sts3215_params = feetech_params_dict["sts3215"]
@@ -349,16 +347,16 @@ class ZbotTask(ksim.PPOTask[ZbotTaskConfig], Generic[Config]):
                 raise ValueError("sts3250_params['error_gain_data'] must be a list.")
 
             # Build a list of error_gain_data (one entry per joint)
-            error_gain_data_list_J: list[ErrorGainData] = []
+            error_gain_data_list_j: list[ErrorGainData] = []
 
             for i, joint_name in enumerate(joint_names):
                 joint_meta = metadata[joint_name]
                 if "_15" in joint_name:
-                    max_torque_J = max_torque_J.at[i].set(sts3215_params["max_torque"])
-                    error_gain_data_list_J.append(sts3215_params["error_gain_data"])
+                    max_torque_j = max_torque_j.at[i].set(sts3215_params["max_torque"])
+                    error_gain_data_list_j.append(sts3215_params["error_gain_data"])
                 elif "_50" in joint_name:
-                    max_torque_J = max_torque_J.at[i].set(sts3250_params["max_torque"])
-                    error_gain_data_list_J.append(sts3250_params["error_gain_data"])
+                    max_torque_j = max_torque_j.at[i].set(sts3250_params["max_torque"])
+                    error_gain_data_list_j.append(sts3250_params["error_gain_data"])
                 else:
                     raise ValueError(f"Invalid joint name: {joint_name}")
 
@@ -373,15 +371,15 @@ class ZbotTask(ksim.PPOTask[ZbotTaskConfig], Generic[Config]):
                 except ValueError as e:
                     raise ValueError(f"Could not convert kp/kd gains to a float for joint {joint_name}: {e}")
 
-                kp_J = kp_J.at[i].set(kp_val)
-                kd_J = kd_J.at[i].set(kd_val)
+                kp_j = kp_j.at[i].set(kp_val)
+                kd_j = kd_j.at[i].set(kd_val)
         else:
             raise ValueError("Metadata is not available")
         return FeetechActuators(
-            max_torque_J=max_torque_J,
-            kp_J=kp_J,
-            kd_J=kd_J,
-            error_gain_data_J=error_gain_data_list_J,
+            max_torque_j=max_torque_j,
+            kp_j=kp_j,
+            kd_j=kd_j,
+            error_gain_data_j=error_gain_data_list_j,
             action_noise=0.0,
             action_noise_type="none",
             torque_noise=0.0,

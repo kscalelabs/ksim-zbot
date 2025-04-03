@@ -156,10 +156,7 @@ async def reset(kos: pykos.KOS) -> None:
     await kos.sim.reset(
         pos={"x": 0.0, "y": 0.0, "z": 0.41},
         quat={"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
-        joints=[
-            {"name": actuator.joint_name, "pos": 0.0}
-            for actuator in ACTUATOR_LIST
-        ],
+        joints=[{"name": actuator.joint_name, "pos": 0.0} for actuator in ACTUATOR_LIST],
     )
 
 
