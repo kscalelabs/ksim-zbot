@@ -31,33 +31,35 @@ class Actuator:
     max_torque: float
     joint_name: str
 
+
 KP = 100.0
 
+
 ACTUATOR_LIST: list[Actuator] = [
-    # Right arm (nn_id 0-4)
-    Actuator(actuator_id=21, nn_id=0, kp=KP, kd=5.0, max_torque=5.47, joint_name="right_shoulder_pitch"),
-    Actuator(actuator_id=22, nn_id=1, kp=KP, kd=5.0, max_torque=5.47, joint_name="right_shoulder_roll"),
-    Actuator(actuator_id=23, nn_id=2, kp=KP, kd=5.0, max_torque=5.47, joint_name="right_elbow_roll"),
-    Actuator(actuator_id=24, nn_id=3, kp=KP, kd=5.0, max_torque=5.47, joint_name="right_gripper_roll"),
-    Actuator(actuator_id=46, nn_id=4, kp=KP, kd=5.0, max_torque=8.72, joint_name="right_ankle_roll"),
     # Left arm (nn_id 5-9)
-    Actuator(actuator_id=11, nn_id=5, kp=KP, kd=5.0, max_torque=5.47, joint_name="left_shoulder_pitch"),
-    Actuator(actuator_id=12, nn_id=6, kp=KP, kd=5.0, max_torque=5.47, joint_name="left_shoulder_roll"),
-    Actuator(actuator_id=13, nn_id=7, kp=KP, kd=5.0, max_torque=5.47, joint_name="left_elbow_roll"),
-    Actuator(actuator_id=14, nn_id=8, kp=KP, kd=5.0, max_torque=5.47, joint_name="left_gripper_roll"),
-    Actuator(actuator_id=36, nn_id=9, kp=KP, kd=5.0, max_torque=8.72, joint_name="left_ankle_roll"),
+    Actuator(actuator_id=11, nn_id=0, kp=KP, kd=5.0, max_torque=5.47, joint_name="left_shoulder_pitch"),
+    Actuator(actuator_id=12, nn_id=1, kp=KP, kd=5.0, max_torque=5.47, joint_name="left_shoulder_roll"),
+    Actuator(actuator_id=13, nn_id=2, kp=KP, kd=5.0, max_torque=5.47, joint_name="left_elbow_roll"),
+    Actuator(actuator_id=14, nn_id=3, kp=KP, kd=5.0, max_torque=5.47, joint_name="left_gripper_roll"),
+    # Right arm (nn_id 0-4)
+    Actuator(actuator_id=21, nn_id=4, kp=KP, kd=5.0, max_torque=5.47, joint_name="right_shoulder_pitch"),
+    Actuator(actuator_id=22, nn_id=5, kp=KP, kd=5.0, max_torque=5.47, joint_name="right_shoulder_roll"),
+    Actuator(actuator_id=23, nn_id=6, kp=KP, kd=5.0, max_torque=5.47, joint_name="right_elbow_roll"),
+    Actuator(actuator_id=24, nn_id=7, kp=KP, kd=5.0, max_torque=5.47, joint_name="right_gripper_roll"),
     # Right leg (nn_id 10-14)
+    Actuator(actuator_id=41, nn_id=8, kp=KP, kd=5.0, max_torque=8.72, joint_name="right_hip_yaw"),
+    Actuator(actuator_id=42, nn_id=9, kp=KP, kd=5.0, max_torque=8.72, joint_name="right_hip_roll"),
     Actuator(actuator_id=43, nn_id=10, kp=KP, kd=5.0, max_torque=8.72, joint_name="right_hip_pitch"),
-    Actuator(actuator_id=42, nn_id=11, kp=KP, kd=5.0, max_torque=8.72, joint_name="right_hip_roll"),
-    Actuator(actuator_id=41, nn_id=12, kp=KP, kd=5.0, max_torque=8.72, joint_name="right_hip_yaw"),
-    Actuator(actuator_id=44, nn_id=13, kp=KP, kd=5.0, max_torque=8.72, joint_name="right_knee_pitch"),
-    Actuator(actuator_id=45, nn_id=14, kp=KP, kd=5.0, max_torque=8.72, joint_name="right_ankle_pitch"),
+    Actuator(actuator_id=44, nn_id=11, kp=KP, kd=5.0, max_torque=8.72, joint_name="right_knee_pitch"),
+    Actuator(actuator_id=45, nn_id=12, kp=KP, kd=5.0, max_torque=8.72, joint_name="right_ankle_pitch"),
+    Actuator(actuator_id=46, nn_id=13, kp=KP, kd=5.0, max_torque=8.72, joint_name="right_ankle_roll"),
     # Left leg (nn_id 15-19)
-    Actuator(actuator_id=33, nn_id=15, kp=KP, kd=5.0, max_torque=8.72, joint_name="left_hip_pitch"),
-    Actuator(actuator_id=32, nn_id=16, kp=KP, kd=5.0, max_torque=8.72, joint_name="left_hip_roll"),
-    Actuator(actuator_id=31, nn_id=17, kp=KP, kd=5.0, max_torque=8.72, joint_name="left_hip_yaw"),
-    Actuator(actuator_id=34, nn_id=18, kp=KP, kd=5.0, max_torque=8.72, joint_name="left_knee_pitch"),
-    Actuator(actuator_id=35, nn_id=19, kp=KP, kd=5.0, max_torque=8.72, joint_name="left_ankle_pitch"),
+    Actuator(actuator_id=31, nn_id=14, kp=KP, kd=5.0, max_torque=8.72, joint_name="left_hip_yaw"),
+    Actuator(actuator_id=32, nn_id=15, kp=KP, kd=5.0, max_torque=8.72, joint_name="left_hip_roll"),
+    Actuator(actuator_id=33, nn_id=16, kp=KP, kd=5.0, max_torque=8.72, joint_name="left_hip_pitch"),
+    Actuator(actuator_id=34, nn_id=17, kp=KP, kd=5.0, max_torque=8.72, joint_name="left_knee_pitch"),
+    Actuator(actuator_id=35, nn_id=18, kp=KP, kd=5.0, max_torque=8.72, joint_name="left_ankle_pitch"),
+    Actuator(actuator_id=36, nn_id=19, kp=KP, kd=5.0, max_torque=8.72, joint_name="left_ankle_roll"),
 ]
 
 
