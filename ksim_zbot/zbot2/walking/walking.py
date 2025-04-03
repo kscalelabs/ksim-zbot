@@ -573,10 +573,9 @@ if __name__ == "__main__":
             gamma=0.97,
             lam=0.95,
             entropy_coef=0.001,
-            learning_rate=1e-4,
+            learning_rate=3e-4,
             clip_param=0.3,
             max_grad_norm=1.0,
             export_for_inference=True,
-            use_mit_actuators=False,
         ),
     )
