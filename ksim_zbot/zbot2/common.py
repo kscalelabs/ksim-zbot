@@ -189,19 +189,17 @@ class FeetechActuators(Actuators):
 
         # Smooth position target based on max_velocity constraint
         max_delta_pos = self.max_velocity_j * self.dt
-        print(f"dt: {self.dt} max_delta_pos: {max_delta_pos}")
         qtarget_smooth = jnp.clip(action_j,
                                 current_pos_j - max_delta_pos,
                                 current_pos_j + max_delta_pos)
 
          # Estimate velocity target via numerical differentiation
         self.prev_qtarget = getattr(self, 'prev_qtarget', current_pos_j)
-        target_velocity_j = (qtarget_smooth - self.prev_qtarget) / self.dt
+        expected_velocity_j = (qtarget_smooth - self.prev_qtarget) / self.dt
         self.prev_qtarget = qtarget_smooth
 
-
         pos_error_j = qtarget_smooth - current_pos_j
-        vel_error_j = target_velocity_j - current_vel_j 
+        vel_error_j = expected_velocity_j - current_vel_j 
 
         def process_single_joint(err: Array, k: Array, c: Array, kc: Array, flag: Array, default_eg: Array) -> Array:
             abs_err = jnp.abs(err)
@@ -236,11 +234,11 @@ class FeetechActuators(Actuators):
 
         # Add noise to torque
         torque_j_noisy = self.add_noise(self.torque_noise, self.torque_noise_type, torque_j, tor_rng)
-
-        logger.info(f"duty_j: {duty_j} volts_j: {volts_j} torque_j: {torque_j_noisy}")
-        logger.info(f"kp_j: {self.kp_j} kd_j: {self.kd_j} error_gain_j: {error_gain_j}")
-        logger.info(f"max_velocity_j: {self.max_velocity_j} max_pwm_j: {self.max_pwm_j}")
-        logger.info(f"vin_j: {self.vin_j} kt_j: {self.kt_j} R_j: {self.R_j}")
+        
+        #logger.info(f"duty_j: {duty_j} volts_j: {volts_j} torque_j: {torque_j_noisy}")
+        #logger.info(f"kp_j: {self.kp_j} kd_j: {self.kd_j} error_gain_j: {error_gain_j}")
+        #logger.info(f"max_velocity_j: {self.max_velocity_j} max_pwm_j: {self.max_pwm_j}")
+        #logger.info(f"vin_j: {self.vin_j} kt_j: {self.kt_j} R_j: {self.R_j}")
 
         return torque_j_noisy
 
