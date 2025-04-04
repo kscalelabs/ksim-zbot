@@ -5,7 +5,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Generic, TypedDict, TypeVar
+from typing import Callable, Generic, Optional, Sequence, TypedDict, TypeVar, Union
 
 import distrax
 import equinox as eqx
@@ -292,57 +292,104 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
                         -max_torque,
                         max_torque,
                     ]
+
         return mj_model
 
-    def log_mujoco_joint_config(self, mj_model: mujoco.MjModel) -> None:
-        # Collect and print relevant joint and actuator properties in a readable format.
-        metadata = self.get_mujoco_model_metadata(mj_model)
-        debug_lines = []
-        debug_lines.append("==== Joint and Actuator Properties ====")
-        for i in range(mj_model.njnt):
-            joint_name = mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_JOINT, i)
+    def log_joint_config(self, model: Union[mujoco.MjModel, mjx.Model]) -> None:
+        metadata = self.get_mujoco_model_metadata(model)
+        debug_lines = ["==== Joint and Actuator Properties ===="]
+
+        if isinstance(model, mujoco.MjModel):
+            logger.info("******** PhysicsModel is Mujoco")
+
+            njnt = model.njnt
+
+            def get_joint_name(idx: int) -> Optional[str]:
+                return mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, idx)
+
+            def get_actuator_id(name: str) -> int:
+                return mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
+
+            dof_damping = model.dof_damping
+            dof_armature = model.dof_armature
+            dof_frictionloss = model.dof_frictionloss
+            jnt_dofadr = model.jnt_dofadr
+            actuator_forcerange = model.actuator_forcerange
+
+        elif isinstance(model, mjx.Model):
+            logger.info("******** PhysicsModel is MJX")
+
+            njnt = model.njnt
+            dof_damping = model.dof_damping
+            dof_armature = model.dof_armature
+            dof_frictionloss = model.dof_frictionloss
+            jnt_dofadr = model.jnt_dofadr
+            actuator_forcerange = model.actuator_forcerange
+
+            def extract_name(byte_array: bytes, adr_array: Sequence[int], idx: int) -> Optional[str]:
+                adr = adr_array[idx]
+                if adr < 0:
+                    return None
+                end = byte_array.find(b"\x00", adr)
+                return byte_array[adr:end].decode("utf-8")
+
+            actuator_name_to_id = {
+                extract_name(model.names, model.name_actuatoradr, i): i
+                for i in range(model.nu)
+                if model.name_actuatoradr[i] >= 0
+            }
+
+            def get_joint_name(idx: int) -> Optional[str]:
+                return extract_name(model.names, model.name_jntadr, idx)
+
+            def get_actuator_id(name: str) -> int:
+                return actuator_name_to_id.get(name, -1)
+
+        else:
+            raise TypeError("Unsupported model type provided")
+
+        for i in range(njnt):
+            joint_name = get_joint_name(i)
             if joint_name is None:
                 continue
 
-            # Retrieve joint metadata and check for actuator_type
-            if joint_name not in metadata:
-                logger.warning("Joint '%s' is missing metadata; skipping parameter assignment.", joint_name)
+            joint_meta = metadata.get(joint_name)
+            if not joint_meta:
+                logger.warning("Joint '%s' missing metadata; skipping.", joint_name)
                 continue
 
-            joint_meta = metadata[joint_name]
             actuator_type = joint_meta.get("actuator_type")
             if actuator_type is None:
-                logger.warning(
-                    "Joint '%s' is missing an actuator_type; skipping parameter assignment.",
-                    joint_name,
-                )
+                logger.warning("Joint '%s' missing actuator_type; skipping.", joint_name)
                 continue
 
-            dof_id = mj_model.jnt_dofadr[i]
-            damping = mj_model.dof_damping[dof_id]
-            armature = mj_model.dof_armature[dof_id]
-            frictionloss = mj_model.dof_frictionloss[dof_id]
+            dof_id = jnt_dofadr[i]
+            damping = dof_damping[dof_id]
+            armature = dof_armature[dof_id]
+            frictionloss = dof_frictionloss[dof_id]
             joint_id = joint_meta.get("id", "N/A")
             kp = joint_meta.get("kp", "N/A")
             kd = joint_meta.get("kd", "N/A")
 
             actuator_name = f"{joint_name}_ctrl"
-            actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
+            actuator_id = get_actuator_id(actuator_name)
 
             line = (
-                f"Joint: {joint_name:<20} | Joint ID: {joint_id!s:<3} | Damping: {damping:6.3f} | "
-                f"Armature: {armature:6.3f} | Friction: {frictionloss:6.3f}"
+                f"Joint: {joint_name:<20} | Joint ID: {joint_id!s:<3} | "
+                f"Damping: {damping:6.3f} | Armature: {armature:6.3f} | "
+                f"Friction: {frictionloss:6.3f}"
             )
 
             if actuator_id >= 0:
-                forcerange = mj_model.actuator_forcerange[actuator_id]
+                forcerange = actuator_forcerange[actuator_id]
                 line += (
                     f" | Actuator: {actuator_name:<20} (ID: {actuator_id:2d}) | "
                     f"Forcerange: [{forcerange[0]:6.3f}, {forcerange[1]:6.3f}] | "
                     f"Kp: {kp} | Kd: {kd}"
                 )
             else:
-                line += " | Actuator: N/A"
+                line += " | Actuator: N/A (passive joint)"
+
             debug_lines.append(line)
 
         logger.info("\n".join(debug_lines))
@@ -457,15 +504,7 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
                 kp_j = kp_j.at[i].set(kp_val)
                 kd_j = kd_j.at[i].set(kd_val)
 
-            if isinstance(physics_model, mujoco.MjModel):
-                mj_model = physics_model
-                self.log_mujoco_joint_config(mj_model)
-            ## TODO: can I interrogate mjx.Model similarly?
-            #elif isinstance(physics_model, mjx.Model):
-                # If mjx.Model is compatible or can be used directly, assign it.
-                # Otherwise, perform any necessary conversion.
-                #mj_model = physics_model
-                #self.log_mujoco_joint_config(mj_model)
+            self.log_joint_config(physics_model)
 
         else:
             raise ValueError("Metadata is not available")
