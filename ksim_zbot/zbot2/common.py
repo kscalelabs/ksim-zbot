@@ -227,6 +227,8 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
         print(f"Loading MJCF model from {mjcf_path}")
         mj_model = load_mjmodel(mjcf_path, scene="smooth")
 
+        metadata = self.get_mujoco_model_metadata(mj_model)
+
         mj_model.opt.timestep = jnp.array(self.config.dt)
         mj_model.opt.iterations = 6
         mj_model.opt.ls_iterations = 6
@@ -244,24 +246,32 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
             if key not in sts3250_params:
                 raise ValueError(f"Missing required key '{key}' in sts3250 parameters.")
 
-        # Apply servo-specific parameters based on joint name suffix
+            # Apply servo-specific parameters based on joint metadata
         for i in range(mj_model.njnt):
             joint_name = mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_JOINT, i)
-            if joint_name is None or not any(suffix in joint_name for suffix in ["_15", "_50"]):
+            if joint_name is None:
+                print(f"WARNING: Joint at index {i} has no name; skipping parameter assignment.")
+                continue
+
+            # Look up joint metadata. Warn if actuator_type is missing.
+            if joint_name not in metadata:
+                print(f"WARNING: Joint '{joint_name}' is missing; skipping parameter assignment.")
+                continue
+
+            joint_meta = metadata[joint_name]
+            actuator_type = joint_meta.get("actuator_type")
+            if actuator_type is None:
+                print(f"WARNING: Joint '{joint_name}' is missing an actuator_type; skipping parameter assignment.")
                 continue
 
             dof_id = mj_model.jnt_dofadr[i]
 
             # Apply parameters based on the joint suffix
-            if "_15" in joint_name:  # STS3215 servos (arms)
+            if "feetech-sts3215" in actuator_type:  # STS3215 servos (arms)
                 mj_model.dof_damping[dof_id] = sts3215_params["damping"]
                 mj_model.dof_armature[dof_id] = sts3215_params["armature"]
                 mj_model.dof_frictionloss[dof_id] = sts3215_params["frictionloss"]
-
-                # Get base name for actuator (remove the _15 suffix)
-                base_name = joint_name.rsplit("_", 1)[0]
-                actuator_name = f"{base_name}_15_ctrl"
-
+                actuator_name = f"{joint_name}_ctrl"
                 actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
                 if actuator_id >= 0:
                     max_torque = float(sts3215_params["max_torque"])
@@ -270,15 +280,11 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
                         max_torque,
                     ]
 
-            elif "_50" in joint_name:  # STS3250 servos (legs)
+            elif "feetech-sts3250" in actuator_type:  # STS3250 servos (legs)
                 mj_model.dof_damping[dof_id] = sts3250_params["damping"]
                 mj_model.dof_armature[dof_id] = sts3250_params["armature"]
                 mj_model.dof_frictionloss[dof_id] = sts3250_params["frictionloss"]
-
-                # Get base name for actuator (remove the _50 suffix)
-                base_name = joint_name.rsplit("_", 1)[0]
-                actuator_name = f"{base_name}_50_ctrl"
-
+                actuator_name = f"{joint_name}_ctrl"
                 actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
                 if actuator_id >= 0:
                     max_torque = float(sts3250_params["max_torque"])
@@ -286,8 +292,60 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
                         -max_torque,
                         max_torque,
                     ]
-
         return mj_model
+
+    def log_mujoco_joint_config(self, mj_model: mujoco.MjModel) -> None:
+        # Collect and print relevant joint and actuator properties in a readable format.
+        metadata = self.get_mujoco_model_metadata(mj_model)
+        debug_lines = []
+        debug_lines.append("==== Joint and Actuator Properties ====")
+        for i in range(mj_model.njnt):
+            joint_name = mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_JOINT, i)
+            if joint_name is None:
+                continue
+
+            # Retrieve joint metadata and check for actuator_type
+            if joint_name not in metadata:
+                logger.warning("Joint '%s' is missing metadata; skipping parameter assignment.", joint_name)
+                continue
+
+            joint_meta = metadata[joint_name]
+            actuator_type = joint_meta.get("actuator_type")
+            if actuator_type is None:
+                logger.warning(
+                    "Joint '%s' is missing an actuator_type; skipping parameter assignment.",
+                    joint_name,
+                )
+                continue
+
+            dof_id = mj_model.jnt_dofadr[i]
+            damping = mj_model.dof_damping[dof_id]
+            armature = mj_model.dof_armature[dof_id]
+            frictionloss = mj_model.dof_frictionloss[dof_id]
+            joint_id = joint_meta.get("id", "N/A")
+            kp = joint_meta.get("kp", "N/A")
+            kd = joint_meta.get("kd", "N/A")
+
+            actuator_name = f"{joint_name}_ctrl"
+            actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
+
+            line = (
+                f"Joint: {joint_name:<20} | Joint ID: {joint_id!s:<3} | Damping: {damping:6.3f} | "
+                f"Armature: {armature:6.3f} | Friction: {frictionloss:6.3f}"
+            )
+
+            if actuator_id >= 0:
+                forcerange = mj_model.actuator_forcerange[actuator_id]
+                line += (
+                    f" | Actuator: {actuator_name:<20} (ID: {actuator_id:2d}) | "
+                    f"Forcerange: [{forcerange[0]:6.3f}, {forcerange[1]:6.3f}] | "
+                    f"Kp: {kp} | Kd: {kd}"
+                )
+            else:
+                line += " | Actuator: N/A"
+            debug_lines.append(line)
+
+        logger.info("\n".join(debug_lines))
 
     def get_mujoco_model_metadata(self, mj_model: mujoco.MjModel) -> dict[str, dict]:
         # metadata = asyncio.run(ksim.get_mujoco_model_metadata(self.config.robot_urdf_path, cache=False))
@@ -298,7 +356,6 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
         metadata_path = Path(self.config.robot_urdf_path) / "metadata.json"
         if not metadata_path.exists():
             raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
-
         try:
             with open(metadata_path, "r") as f:
                 raw_metadata = json.load(f)
@@ -318,7 +375,6 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
         params_path = Path(self.config.actuator_params_path)
         params_file_3215 = params_path / "sts3215_12v_params.json"
         params_file_3250 = params_path / "sts3250_params.json"
-
         if not params_file_3215.exists():
             raise ValueError(
                 f"Feetech parameters file '{params_file_3215}' not found. Please ensure it exists in '{params_path}'."
@@ -327,7 +383,6 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
             raise ValueError(
                 f"Feetech parameters file '{params_file_3250}' not found. Please ensure it exists in '{params_path}'."
             )
-
         with open(params_file_3215, "r") as f:
             params_3215: FeetechParams = json.load(f)
         with open(params_file_3250, "r") as f:
@@ -379,10 +434,10 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
                 if not isinstance(actuator_type, str):
                     raise TypeError(f"'actuator_type' for joint {joint_name} must be a string.")
 
-                if "sts3215" in actuator_type:
+                if "feetech-sts3215" in actuator_type:
                     max_torque_j = max_torque_j.at[i].set(sts3215_params["max_torque"])
                     error_gain_data_list_j.append(sts3215_params["error_gain_data"])
-                elif "sts3250" in actuator_type:
+                elif "feetech-sts3250" in actuator_type:
                     max_torque_j = max_torque_j.at[i].set(sts3250_params["max_torque"])
                     error_gain_data_list_j.append(sts3250_params["error_gain_data"])
                 else:
@@ -402,14 +457,14 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
                 kp_j = kp_j.at[i].set(kp_val)
                 kd_j = kd_j.at[i].set(kd_val)
 
-                logger.info(
-                    "joint %s, id: %d, actuator_type: %s, kp=%f, kd=%f",
-                    joint_name,
-                    joint_meta["id"],
-                    actuator_type,
-                    kp_val,
-                    kd_val,
-                )
+            if isinstance(physics_model, mujoco.MjModel):
+                mj_model = physics_model
+            elif isinstance(physics_model, mjx.Model):
+                # If mjx.Model is compatible or can be used directly, assign it.
+                # Otherwise, perform any necessary conversion.
+                mj_model = physics_model
+            self.log_mujoco_joint_config(mj_model)
+
         else:
             raise ValueError("Metadata is not available")
         return FeetechActuators(
