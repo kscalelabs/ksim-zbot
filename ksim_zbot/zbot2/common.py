@@ -459,11 +459,13 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
 
             if isinstance(physics_model, mujoco.MjModel):
                 mj_model = physics_model
-            elif isinstance(physics_model, mjx.Model):
+                self.log_mujoco_joint_config(mj_model)
+            ## TODO: can I interrogate mjx.Model similarly?
+            #elif isinstance(physics_model, mjx.Model):
                 # If mjx.Model is compatible or can be used directly, assign it.
                 # Otherwise, perform any necessary conversion.
-                mj_model = physics_model
-            self.log_mujoco_joint_config(mj_model)
+                #mj_model = physics_model
+                #self.log_mujoco_joint_config(mj_model)
 
         else:
             raise ValueError("Metadata is not available")
