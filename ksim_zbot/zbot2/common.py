@@ -116,6 +116,7 @@ class FeetechActuators(Actuators):
         self.kt_j = kt_j
         self.R_j = R_j
         self.dt = dt
+        self.prev_qtarget_j = jnp.zeros_like(self.kp_j)
         j = kp_j.shape[0]  # num outputs
 
         if len(error_gain_data_j) != j:
@@ -193,8 +194,14 @@ class FeetechActuators(Actuators):
                                 current_pos_j - max_delta_pos,
                                 current_pos_j + max_delta_pos)
 
+         # Estimate velocity target via numerical differentiation
+        self.prev_qtarget = getattr(self, 'prev_qtarget', current_pos_j)
+        target_velocity_j = (qtarget_smooth - self.prev_qtarget) / self.dt
+        self.prev_qtarget = qtarget_smooth
+
+
         pos_error_j = qtarget_smooth - current_pos_j
-        vel_error_j = -current_vel_j
+        vel_error_j = target_velocity_j - current_vel_j 
 
         def process_single_joint(err: Array, k: Array, c: Array, kc: Array, flag: Array, default_eg: Array) -> Array:
             abs_err = jnp.abs(err)

@@ -49,9 +49,7 @@ NUM_OUTPUTS = 20
 @attrs.define(frozen=True)
 class HistoryObservation(ksim.Observation):
     def observe(self, state: ObservationState, rng: PRNGKeyArray) -> Array:
-        if not isinstance(state.carry, Array):
-            raise ValueError("Carry is not a history array")
-        return state.carry
+        return jnp.zeros(0, dtype=jnp.float32)
 
 
 @attrs.define(frozen=True)
