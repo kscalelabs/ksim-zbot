@@ -82,6 +82,8 @@ class FeetechParams(TypedDict):
     vin: float
     kt: float
     R: float
+    max_velocity: float
+    max_pwm: float
     error_gain_data: ErrorGainData
 
 
@@ -93,6 +95,12 @@ class FeetechActuators(Actuators):
         max_torque_j: Array,
         kp_j: Array,
         kd_j: Array,
+        max_velocity_j: Array,
+        max_pwm_j: Array,
+        vin_j: Array,
+        kt_j: Array,
+        R_j: Array,
+        dt: float,
         error_gain_data_j: list[ErrorGainData],  # Mandatory
         action_noise: float = 0.0,
         action_noise_type: NoiseType = "none",
@@ -102,6 +110,12 @@ class FeetechActuators(Actuators):
         self.max_torque_j = max_torque_j
         self.kp_j = kp_j
         self.kd_j = kd_j
+        self.max_velocity_j = max_velocity_j
+        self.max_pwm_j = max_pwm_j
+        self.vin_j = vin_j
+        self.kt_j = kt_j
+        self.R_j = R_j
+        self.dt = dt
         j = kp_j.shape[0]  # num outputs
 
         if len(error_gain_data_j) != j:
@@ -166,16 +180,25 @@ class FeetechActuators(Actuators):
         return spline_value
 
     def get_ctrl(self, action_j: Array, physics_data: PhysicsData, rng: PRNGKeyArray) -> Array:
-        """Compute torque control using Feetech parameters and mandatory cubic spline (JAX friendly)."""
+        """Compute torque control with velocity smoothing and duty cycle clipping (JAX friendly)."""
         pos_rng, tor_rng = jax.random.split(rng)
+
         current_pos_j = physics_data.qpos[7:]
         current_vel_j = physics_data.qvel[6:]
-        pos_error_j = action_j - current_pos_j
+
+        # Smooth position target based on max_velocity constraint
+        max_delta_pos = self.max_velocity_j * self.dt
+        print(f"dt: {self.dt} max_delta_pos: {max_delta_pos}")
+        qtarget_smooth = jnp.clip(action_j,
+                                current_pos_j - max_delta_pos,
+                                current_pos_j + max_delta_pos)
+
+        pos_error_j = qtarget_smooth - current_pos_j
         vel_error_j = -current_vel_j
 
         def process_single_joint(err: Array, k: Array, c: Array, kc: Array, flag: Array, default_eg: Array) -> Array:
             abs_err = jnp.abs(err)
-            x_clamped = jnp.clip(abs_err, k[0], k[kc - 1])  # Use knot_count 'kc' for safe indexing
+            x_clamped = jnp.clip(abs_err, k[0], k[kc - 1])
 
             def eval_spline_branch() -> Array:
                 return self._eval_spline(x_clamped, k, c, kc)
@@ -186,6 +209,7 @@ class FeetechActuators(Actuators):
             result = jax.lax.cond(flag, eval_spline_branch, default_gain_branch)
             return result
 
+        # Compute error gain using spline interpolation or default value
         error_gain_j = jax.vmap(process_single_joint)(
             pos_error_j,
             self.stacked_knots,
@@ -195,13 +219,24 @@ class FeetechActuators(Actuators):
             self.default_error_gain,
         )
 
-        duty_j = self.kp_j * error_gain_j * pos_error_j + self.kd_j * vel_error_j
-        torque_j = jnp.clip(
-            self.add_noise(self.torque_noise, self.torque_noise_type, duty_j * self.max_torque_j, tor_rng),
-            -self.max_torque_j,
-            self.max_torque_j,
-        )
-        return torque_j
+        # Compute raw duty cycle and clip by max_pwm
+        raw_duty_j = self.kp_j * error_gain_j * pos_error_j + self.kd_j * vel_error_j
+        duty_j = jnp.clip(raw_duty_j, -self.max_pwm_j, self.max_pwm_j)
+
+        # Compute torque
+        volts_j = duty_j * self.vin_j
+        torque_j = volts_j * self.kt_j / self.R_j
+
+        # Add noise to torque
+        torque_j_noisy = self.add_noise(self.torque_noise, self.torque_noise_type, torque_j, tor_rng)
+
+        logger.info(f"duty_j: {duty_j} volts_j: {volts_j} torque_j: {torque_j_noisy}")
+        logger.info(f"kp_j: {self.kp_j} kd_j: {self.kd_j} error_gain_j: {error_gain_j}")
+        logger.info(f"max_velocity_j: {self.max_velocity_j} max_pwm_j: {self.max_pwm_j}")
+        logger.info(f"vin_j: {self.vin_j} kt_j: {self.kt_j} R_j: {self.R_j}")
+
+        return torque_j_noisy
+
 
     def get_default_action(self, physics_data: PhysicsData) -> Array:
         return physics_data.qpos[7:]
@@ -449,18 +484,24 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
 
             num_joints = len(joint_names)
             max_torque_j = jnp.zeros(num_joints)
+            max_velocity_j = jnp.zeros(num_joints)
+            max_pwm_j = jnp.zeros(num_joints)
+            vin_j = jnp.zeros(num_joints)
+            kt_j = jnp.zeros(num_joints)
+            R_j = jnp.zeros(num_joints)
             kp_j = jnp.zeros(num_joints)
             kd_j = jnp.zeros(num_joints)
 
             feetech_params_dict = self._load_feetech_params()
             sts3215_params = feetech_params_dict["sts3215"]
             sts3250_params = feetech_params_dict["sts3250"]
-            required_keys = ["max_torque", "error_gain_data"]
+            required_keys = ["max_torque", "error_gain_data", "max_velocity", "max_pwm", "vin", "kt", "R"]
             for key in required_keys:
                 if key not in sts3215_params:
                     raise ValueError(f"Missing required key '{key}' in sts3215 parameters.")
                 if key not in sts3250_params:
                     raise ValueError(f"Missing required key '{key}' in sts3250 parameters.")
+                    
 
             if not isinstance(sts3215_params["error_gain_data"], list):
                 raise ValueError("sts3215_params['error_gain_data'] must be a list.")
@@ -483,9 +524,19 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
 
                 if "feetech-sts3215" in actuator_type:
                     max_torque_j = max_torque_j.at[i].set(sts3215_params["max_torque"])
+                    max_velocity_j = max_velocity_j.at[i].set(sts3215_params["max_velocity"])
+                    max_pwm_j = max_pwm_j.at[i].set(sts3215_params["max_pwm"])
+                    vin_j = vin_j.at[i].set(sts3215_params["vin"])
+                    kt_j = kt_j.at[i].set(sts3215_params["kt"])
+                    R_j = R_j.at[i].set(sts3215_params["R"])
                     error_gain_data_list_j.append(sts3215_params["error_gain_data"])
                 elif "feetech-sts3250" in actuator_type:
                     max_torque_j = max_torque_j.at[i].set(sts3250_params["max_torque"])
+                    max_velocity_j = max_velocity_j.at[i].set(sts3250_params["max_velocity"])
+                    max_pwm_j = max_pwm_j.at[i].set(sts3250_params["max_pwm"])
+                    vin_j = vin_j.at[i].set(sts3250_params["vin"])
+                    kt_j = kt_j.at[i].set(sts3250_params["kt"])
+                    R_j = R_j.at[i].set(sts3250_params["R"])
                     error_gain_data_list_j.append(sts3250_params["error_gain_data"])
                 else:
                     raise ValueError(f"Unknown or unsupported actuator type '{actuator_type}' for joint {joint_name}")
@@ -510,8 +561,14 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
             raise ValueError("Metadata is not available")
         return FeetechActuators(
             max_torque_j=max_torque_j,
+            max_velocity_j=max_velocity_j,
+            max_pwm_j=max_pwm_j,
+            vin_j=vin_j,
+            kt_j=kt_j,
+            R_j=R_j,
             kp_j=kp_j,
             kd_j=kd_j,
+            dt=self.config.dt,
             error_gain_data_j=error_gain_data_list_j,
             action_noise=0.0,
             action_noise_type="none",
