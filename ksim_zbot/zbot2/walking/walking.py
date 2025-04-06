@@ -158,6 +158,49 @@ class DHHealthyReward(ksim.Reward):
         is_healthy = jnp.where(height > self.healthy_z_upper, 0.0, is_healthy)
         return is_healthy
 
+@attrs.define(frozen=True, kw_only=True)
+class LinearVelocityTrackingReward(ksim.Reward):
+    """Reward for tracking the linear velocity."""
+
+    error_scale: float = attrs.field(default=0.25)
+    linvel_obs_name: str = attrs.field(default="sensor_observation_base_link_vel")
+    command_name: str = attrs.field(default="linear_velocity_step_command")
+    norm: xax.NormType = attrs.field(default="l2")
+
+    def __call__(self, trajectory: ksim.Trajectory) -> Array:
+        if self.linvel_obs_name not in trajectory.obs:
+            raise ValueError(f"Observation {self.linvel_obs_name} not found; add it as an observation in your task.")
+        lin_vel_error = xax.get_norm(
+            trajectory.command[self.command_name][..., :2] - trajectory.obs[self.linvel_obs_name][..., :2], self.norm
+        ).sum(axis=-1)
+        return jnp.exp(-lin_vel_error / self.error_scale)
+
+
+@attrs.define(frozen=True, kw_only=True)
+class AngularVelocityTrackingReward(ksim.Reward):
+    """Reward for tracking the angular velocity."""
+
+    error_scale: float = attrs.field(default=0.25)
+    angvel_obs_name: str = attrs.field(default="sensor_observation_base_link_ang_vel")
+    command_name: str = attrs.field(default="angular_velocity_step_command")
+    norm: xax.NormType = attrs.field(default="l2")
+
+    def __call__(self, trajectory: ksim.Trajectory) -> Array:
+        if self.angvel_obs_name not in trajectory.obs:
+            raise ValueError(f"Observation {self.angvel_obs_name} not found; add it as an observation in your task.")
+        ang_vel_error = jnp.square(
+            trajectory.command[self.command_name][..., 2] - trajectory.obs[self.angvel_obs_name][..., 2]
+        )
+        return jnp.exp(-ang_vel_error / self.error_scale)
+    
+@attrs.define(frozen=True, kw_only=True)
+class TerminationPenalty(ksim.Reward):
+    """Penalty for termination."""
+
+    scale: float = attrs.field(default=-1.0)
+
+    def __call__(self, trajectory: ksim.Trajectory) -> Array:
+        return trajectory.done
 
 class ZbotActor(eqx.Module):
     """Actor for the walking task."""
@@ -348,6 +391,9 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
             DHJointVelocityObservation(),
             ksim.SensorObservation.create(physics_model=physics_model, sensor_name="imu_acc", noise=0.5),
             ksim.SensorObservation.create(physics_model=physics_model, sensor_name="imu_gyro", noise=0.2),
+            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="base_link_quat", noise=0.1),
+            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="base_link_vel", noise=0.1),
+            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="base_link_ang_vel", noise=0.1),
             LastActionObservation(noise=0.0),
             HistoryObservation(),
         ]
@@ -360,9 +406,9 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
     def get_commands(self, physics_model: ksim.PhysicsModel) -> list[ksim.Command]:
         return [
             ksim.LinearVelocityStepCommand(
-                x_range=(-0.1, 0.1),
+                x_range=(0.1, 0.5),
                 y_range=(-0.1, 0.1),
-                x_fwd_prob=0.5,
+                x_fwd_prob=1.0,
                 y_fwd_prob=0.5,
                 x_zero_prob=0.0,
                 y_zero_prob=0.0,
@@ -379,8 +425,11 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
             DHControlPenalty(scale=-0.05),
             DHHealthyReward(scale=0.5),
             DHControlPenalty(scale=-0.01),
-            # LinearVelocityTrackingReward(scale=1.0),
-            NaiveVelocityReward(scale=1.0),
+            TerminationPenalty(scale=-5.0),
+            LinearVelocityTrackingReward(scale=1.0),
+            LinearVelocityTrackingReward(scale=1.0),
+            AngularVelocityTrackingReward(scale=0.75),
+            # NaiveVelocityReward(scale=1.0),
         ]
 
     def get_terminations(self, physics_model: ksim.PhysicsModel) -> list[ksim.Termination]:
