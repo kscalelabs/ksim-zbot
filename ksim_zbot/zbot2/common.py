@@ -187,19 +187,13 @@ class FeetechActuators(Actuators):
         current_pos_j = physics_data.qpos[7:]
         current_vel_j = physics_data.qvel[6:]
 
-        # Smooth position target based on max_velocity constraint
-        max_delta_pos = self.max_velocity_j * self.dt
-        qtarget_smooth = jnp.clip(action_j,
-                                current_pos_j - max_delta_pos,
-                                current_pos_j + max_delta_pos)
+        # Initialize with current position on first step to prevent velocity spike
+        self.prev_qtarget = getattr(self, "prev_qtarget", current_pos_j)
+        expected_velocity_j = (action_j - self.prev_qtarget) / self.dt
+        self.prev_qtarget = action_j
 
-         # Estimate velocity target via numerical differentiation
-        self.prev_qtarget = getattr(self, 'prev_qtarget', current_pos_j)
-        expected_velocity_j = (qtarget_smooth - self.prev_qtarget) / self.dt
-        self.prev_qtarget = qtarget_smooth
-
-        pos_error_j = qtarget_smooth - current_pos_j
-        vel_error_j = expected_velocity_j - current_vel_j 
+        pos_error_j = action_j - current_pos_j
+        vel_error_j = expected_velocity_j - current_vel_j
 
         def process_single_joint(err: Array, k: Array, c: Array, kc: Array, flag: Array, default_eg: Array) -> Array:
             abs_err = jnp.abs(err)
@@ -234,14 +228,13 @@ class FeetechActuators(Actuators):
 
         # Add noise to torque
         torque_j_noisy = self.add_noise(self.torque_noise, self.torque_noise_type, torque_j, tor_rng)
-        
-        #logger.info(f"duty_j: {duty_j} volts_j: {volts_j} torque_j: {torque_j_noisy}")
-        #logger.info(f"kp_j: {self.kp_j} kd_j: {self.kd_j} error_gain_j: {error_gain_j}")
-        #logger.info(f"max_velocity_j: {self.max_velocity_j} max_pwm_j: {self.max_pwm_j}")
-        #logger.info(f"vin_j: {self.vin_j} kt_j: {self.kt_j} R_j: {self.R_j}")
+
+        # logger.info(f"duty_j: {duty_j} volts_j: {volts_j} torque_j: {torque_j_noisy}")
+        # logger.info(f"kp_j: {self.kp_j} kd_j: {self.kd_j} error_gain_j: {error_gain_j}")
+        # logger.info(f"max_velocity_j: {self.max_velocity_j} max_pwm_j: {self.max_pwm_j}")
+        # logger.info(f"vin_j: {self.vin_j} kt_j: {self.kt_j} R_j: {self.R_j}")
 
         return torque_j_noisy
-
 
     def get_default_action(self, physics_data: PhysicsData) -> Array:
         return physics_data.qpos[7:]
@@ -506,7 +499,6 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
                     raise ValueError(f"Missing required key '{key}' in sts3215 parameters.")
                 if key not in sts3250_params:
                     raise ValueError(f"Missing required key '{key}' in sts3250 parameters.")
-                    
 
             if not isinstance(sts3215_params["error_gain_data"], list):
                 raise ValueError("sts3215_params['error_gain_data'] must be a list.")
