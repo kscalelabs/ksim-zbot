@@ -21,11 +21,13 @@ from ksim.actuators import Actuators, NoiseType
 from ksim.types import PhysicsData, PhysicsState
 from mujoco import mjx
 from mujoco_scenes.mjcf import load_mjmodel
-from scipy.interpolate import CubicSpline
+from scipy.optimize import curve_fit
 from xax.nn.export import export
 from xax.utils.types.frozen_dict import FrozenDict
 
 logger = logging.getLogger(__name__)
+
+
 
 
 @jax.tree_util.register_dataclass
@@ -88,7 +90,7 @@ class FeetechParams(TypedDict):
 
 
 class FeetechActuators(Actuators):
-    """Feetech actuator controller using padded JAX arrays (dynamic slice fix)."""
+    """Feetech actuator controller"""
 
     def __init__(
         self,
@@ -117,68 +119,67 @@ class FeetechActuators(Actuators):
         self.R_j = R_j
         self.dt = dt
         self.prev_qtarget_j = jnp.zeros_like(self.kp_j)
+
+        self.action_noise = action_noise
+        self.action_noise_type = action_noise_type
+        self.torque_noise = torque_noise
+        self.torque_noise_type = torque_noise_type
+        
         j = kp_j.shape[0]  # num outputs
+
+        self.a_params = jnp.array([0.00005502] * j) # 3250 params by default 
+        self.b_params = jnp.array([0.16293639] * j) # 3250 params by default 
+        
+        # Default min/max values for error clamping
+        default_min = 0.001
+        default_max = 0.15
+        self.pos_err_min = jnp.array([default_min] * j)
+        self.pos_err_max = jnp.array([default_max] * j)
 
         if len(error_gain_data_j) != j:
             raise ValueError(
                 f"Length of error_gain_data ({len(error_gain_data_j)}) must match number of actuators ({j})."
             )
 
-        temp_knots_j: list[np.ndarray] = []
-        temp_coeffs_j: list[np.ndarray] = []
-        knot_counts_j: list[int] = []
+        # Fit a/x + b parameters for each actuator
+        for i, err_data in enumerate(error_gain_data_j):
 
-        for i, ed in enumerate(error_gain_data_j):
-            # Checks for valid error_gain_data
-            if ed is None or len(ed) < 3:
-                raise ValueError(f"Actuator {i}: Not enough error_gain_data.")
-            ed_sorted = sorted(ed, key=lambda d: d["pos_err"])
-            x_vals = [d["pos_err"] for d in ed_sorted]
+            if err_data is None or len(err_data) < 3:
+                logger.warning("Actuator %d: Not enough error_gain_data. Using default values.", i)
+                continue
+
+            err_data_sorted = sorted(err_data, key=lambda d: d["pos_err"])
+            x_vals = np.array([d["pos_err"] for d in err_data_sorted])
             if len(set(x_vals)) != len(x_vals):
-                raise ValueError(f"Actuator {i}: Duplicate pos_err.")
-            y_vals = [d["error_gain"] for d in ed_sorted]
+                logger.warning("Actuator %d: Duplicate pos_err. Using default values.", i)
+                continue
+            
+            # Record min/max error values for clamping
+            min_err = float(np.min(x_vals))
+            max_err = float(np.max(x_vals))
+            self.pos_err_min = self.pos_err_min.at[i].set(min_err)
+            self.pos_err_max = self.pos_err_max.at[i].set(max_err)
+            logger.info("Actuator %d: Error range [%f, %f]", i, min_err, max_err)
+                
+            y_vals = np.array([d["error_gain"] for d in err_data_sorted])
+            try:
+                def inverse_func(x, a, b):
+                    return a/x + b
+                # Fit the a/x + b function to the data
+                popt, _ = curve_fit(inverse_func, x_vals, y_vals)
+                a_opt, b_opt = popt
+                self.a_params = self.a_params.at[i].set(float(a_opt))
+                self.b_params = self.b_params.at[i].set(float(b_opt))
+                logger.info("Actuator %d: Fitted parameters a=%f, b=%f", i, a_opt, b_opt)
+            except Exception as e:
+                logger.warning("Actuator %d: Error fitting curve: %s. Using default values a=%f, b=%f.", i, e, self.a_params[i], self.b_params[i])        
 
-            # Fit cubic spline
-            cs = CubicSpline(x_vals, y_vals, extrapolate=True)
-            knots = np.array(cs.x, dtype=np.float32)
-            coeffs = np.array(cs.c, dtype=np.float32)
-            if knots.size < 2:
-                raise ValueError(f"Actuator {i}: Spline fitting < 2 knots.")
+        
 
-            temp_knots_j.append(knots)
-            temp_coeffs_j.append(coeffs)
-            knot_counts_j.append(knots.size)
 
-        max_num_knots = max(knot_counts_j) if knot_counts_j else 0
-        max_num_coeffs_intervals = max_num_knots - 1
-        knot_padding_value = jnp.inf
-        coeff_padding_value = jnp.nan
-
-        # Stack values into jnp arrays
-        self.stacked_knots = jnp.full((j, max_num_knots), knot_padding_value, dtype=jnp.float32)
-        self.stacked_coeffs = jnp.full((j, 4, max_num_coeffs_intervals), coeff_padding_value, dtype=jnp.float32)
-        self.knot_counts = jnp.array(knot_counts_j, dtype=jnp.int32)
-        for i in range(j):
-            k = temp_knots_j[i]
-            c = temp_coeffs_j[i]
-            count = knot_counts_j[i]
-            self.stacked_knots = self.stacked_knots.at[i, :count].set(jnp.array(k))
-            self.stacked_coeffs = self.stacked_coeffs.at[i, :, : (count - 1)].set(jnp.array(c))
-
-        self.has_spline_data_flags = jnp.ones(j, dtype=bool)
-        self.default_error_gain = jnp.ones(j, dtype=jnp.float32)
-        self.action_noise = action_noise
-        self.action_noise_type = action_noise_type
-        self.torque_noise = torque_noise
-        self.torque_noise_type = torque_noise_type
-
-    def _eval_spline(self, x_val_sat: Array, knots: Array, coeffs: Array, knot_count: Array) -> Array:
-        """Evaluate spline using SciPy format on potentially padded arrays (dynamic slice fix)."""
-        search_result = jnp.searchsorted(knots, x_val_sat)
-        idx = jnp.clip(search_result - 1, 0, knot_count - 2)
-        dx = x_val_sat - knots[idx]
-        spline_value = coeffs[0, idx] * dx**3 + coeffs[1, idx] * dx**2 + coeffs[2, idx] * dx + coeffs[3, idx]
-        return spline_value
+    def _eval_reciprocal_func(self, x_val: Array, a: Array, b: Array) -> Array:
+        """Evaluate a/x + b function for error gain calculation."""
+        return a / x_val + b
 
     def get_ctrl(self, action_j: Array, physics_data: PhysicsData, rng: PRNGKeyArray) -> Array:
         """Compute torque control with velocity smoothing and duty cycle clipping (JAX friendly)."""
@@ -195,27 +196,18 @@ class FeetechActuators(Actuators):
         pos_error_j = action_j - current_pos_j
         vel_error_j = expected_velocity_j - current_vel_j
 
-        def process_single_joint(err: Array, k: Array, c: Array, kc: Array, flag: Array, default_eg: Array) -> Array:
+        def process_single_joint(err: Array, a: Array, b: Array, pos_err_min: Array, pos_err_max: Array) -> Array:
             abs_err = jnp.abs(err)
-            x_clamped = jnp.clip(abs_err, k[0], k[kc - 1])
+            x_clamped = jnp.clip(abs_err, pos_err_min, pos_err_max)
+            return self._eval_reciprocal_func(x_clamped, a, b)
 
-            def eval_spline_branch() -> Array:
-                return self._eval_spline(x_clamped, k, c, kc)
-
-            def default_gain_branch() -> Array:
-                return jnp.array(default_eg)
-
-            result = jax.lax.cond(flag, eval_spline_branch, default_gain_branch)
-            return result
-
-        # Compute error gain using spline interpolation or default value
+        # Compute error gain using a/x + b formula
         error_gain_j = jax.vmap(process_single_joint)(
             pos_error_j,
-            self.stacked_knots,
-            self.stacked_coeffs,
-            self.knot_counts,
-            self.has_spline_data_flags,
-            self.default_error_gain,
+            self.a_params,
+            self.b_params,
+            self.pos_err_min,
+            self.pos_err_max,
         )
 
         # Compute raw duty cycle and clip by max_pwm
@@ -228,11 +220,6 @@ class FeetechActuators(Actuators):
 
         # Add noise to torque
         torque_j_noisy = self.add_noise(self.torque_noise, self.torque_noise_type, torque_j, tor_rng)
-
-        # logger.info(f"duty_j: {duty_j} volts_j: {volts_j} torque_j: {torque_j_noisy}")
-        # logger.info(f"kp_j: {self.kp_j} kd_j: {self.kd_j} error_gain_j: {error_gain_j}")
-        # logger.info(f"max_velocity_j: {self.max_velocity_j} max_pwm_j: {self.max_pwm_j}")
-        # logger.info(f"vin_j: {self.vin_j} kt_j: {self.kt_j} R_j: {self.R_j}")
 
         return torque_j_noisy
 
