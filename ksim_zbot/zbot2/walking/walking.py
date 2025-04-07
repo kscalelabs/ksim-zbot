@@ -14,11 +14,10 @@ import xax
 from jaxtyping import Array, PRNGKeyArray, PyTree
 from ksim.curriculum import ConstantCurriculum, Curriculum
 from ksim.observation import ObservationState
-from ksim.task.ppo import PPOVariables
 from ksim.types import PhysicsState
 from xax.utils.types.frozen_dict import FrozenDict
 
-from ksim_zbot.zbot2.common import AuxOutputs, ZbotTask, ZbotTaskConfig
+from ksim_zbot.zbot2.common import ZbotTask, ZbotTaskConfig
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +157,7 @@ class DHHealthyReward(ksim.Reward):
         is_healthy = jnp.where(height > self.healthy_z_upper, 0.0, is_healthy)
         return is_healthy
 
+
 @attrs.define(frozen=True, kw_only=True)
 class LinearVelocityTrackingReward(ksim.Reward):
     """Reward for tracking the linear velocity."""
@@ -192,7 +192,8 @@ class AngularVelocityTrackingReward(ksim.Reward):
             trajectory.command[self.command_name][..., 2] - trajectory.obs[self.angvel_obs_name][..., 2]
         )
         return jnp.exp(-ang_vel_error / self.error_scale)
-    
+
+
 @attrs.define(frozen=True, kw_only=True)
 class TerminationPenalty(ksim.Reward):
     """Penalty for termination."""
@@ -201,6 +202,7 @@ class TerminationPenalty(ksim.Reward):
 
     def __call__(self, trajectory: ksim.Trajectory) -> Array:
         return trajectory.done
+
 
 class ZbotActor(eqx.Module):
     """Actor for the walking task."""
@@ -297,7 +299,7 @@ class ZbotCritic(eqx.Module):
             [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], axis=-1
         )  # (NUM_INPUTS)
         return self.call_flat_obs(x_n)
-        
+
     def call_flat_obs(
         self,
         flat_obs_n: Array,
@@ -465,10 +467,9 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
 
         # Concatenate inputs like the humanoid example
         x_n = jnp.concatenate(
-            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], 
-            axis=-1
+            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], axis=-1
         )
-        
+
         # Call the actor with a flat observation tensor
         return model.actor.call_flat_obs(x_n)
 
@@ -485,13 +486,12 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         lin_vel_cmd_2 = commands["linear_velocity_step_command"]
         last_action_n = observations["last_action_observation"]
         history_n = observations["history_observation"]
-        
+
         # Concatenate inputs
         x_n = jnp.concatenate(
-            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], 
-            axis=-1
+            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], axis=-1
         )
-        
+
         # Call critic with flat observation tensor
         return model.critic.call_flat_obs(x_n)
 
@@ -511,19 +511,18 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         lin_vel_cmd_2 = trajectories.command["linear_velocity_step_command"]  # (..., 2)
         last_action_n = trajectories.obs["last_action_observation"]  # (..., N)
         history_n = trajectories.obs["history_observation"]  # (..., 0)
-        
+
         # Concatenate inputs to create a single tensor for each batch item
         flat_obs = jnp.concatenate(
-            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n],
-            axis=-1
+            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], axis=-1
         )
-        
+
         # Call actor and critic directly with batched inputs
         action_dist = model.actor.call_flat_obs(flat_obs)
         log_probs = action_dist.log_prob(trajectories.action)
-        
+
         values = model.critic.call_flat_obs(flat_obs).squeeze(-1)
-        
+
         # Return PPO variables and carry
         return ksim.PPOVariables(log_probs=log_probs, values=values), carry
 
@@ -539,7 +538,7 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
     ) -> ksim.Action:
         action_dist_n = self._run_actor(model, observations, commands)
         action_n = action_dist_n.sample(seed=rng) * self.config.action_scale
-        
+
         if HISTORY_LENGTH > 0:
             joint_pos_n = observations["dhjoint_position_observation"]
             joint_vel_n = observations["dhjoint_velocity_observation"]
@@ -585,9 +584,9 @@ if __name__ == "__main__":
             ctrl_dt=0.02,
             max_action_latency=0.005,
             min_action_latency=0.0,
-            log_full_trajectory_every_n_steps=20,
+            log_full_trajectory_every_n_steps=5,
             log_full_trajectory_on_first_step=True,
-            save_every_n_steps=20,
+            save_every_n_steps=5,
             rollout_length_seconds=5.0,
             # PPO parameters
             gamma=0.97,

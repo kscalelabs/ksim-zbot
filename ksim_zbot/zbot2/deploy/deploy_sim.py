@@ -36,9 +36,9 @@ def load_actuator_mapping(metadata_path: str | Path) -> dict:
     """Load actuator mapping from metadata file."""
     with open(metadata_path, "r") as f:
         metadata = json.load(f)
-    
+
     joint_metadata = metadata.get("joint_name_to_metadata", {})
-    
+
     # Create mapping of actuator IDs to neural network IDs (sorted by actuator ID)
     actuator_mapping = {}
     for joint_name, info in joint_metadata.items():
@@ -49,45 +49,47 @@ def load_actuator_mapping(metadata_path: str | Path) -> dict:
                 "nn_id": None,  # Will be filled based on sorted order
             }
         except (KeyError, ValueError) as e:
-            logger.warning(f"Invalid actuator ID for joint {joint_name}: {e}")
+            logger.warning("Invalid actuator ID for joint %s: %s", joint_name, e)
             continue
-    
+
     # Assign nn_ids based on sorted actuator IDs
     for nn_id, actuator_id in enumerate(sorted(actuator_mapping.keys())):
         actuator_mapping[actuator_id]["nn_id"] = nn_id
-    
+
     return actuator_mapping
+
 
 async def get_observation(kos: pykos.KOS, actuator_mapping: dict) -> np.ndarray:
     """Get observation using actuator mapping from metadata."""
     actuator_ids = list(actuator_mapping.keys())
-    
+
     (actuator_states, imu) = await asyncio.gather(
         kos.actuator.get_actuators_state(actuator_ids),
         kos.imu.get_imu_values(),
     )
-    
+
     # Create arrays sorted by nn_id
     sorted_by_nn = sorted(actuator_mapping.items(), key=lambda x: x[1]["nn_id"])
-    
+
     # Build position and velocity observations
     state_dict_pos = {state.actuator_id: state.position for state in actuator_states.states}
     state_dict_vel = {state.actuator_id: state.velocity for state in actuator_states.states}
-    
+
     pos_obs = np.deg2rad([state_dict_pos[act_id] for act_id, _ in sorted_by_nn])
     vel_obs = np.deg2rad([state_dict_vel[act_id] for act_id, _ in sorted_by_nn])
-    
+
     imu_obs = np.array([imu.accel_x, imu.accel_y, imu.accel_z, imu.gyro_x, imu.gyro_y, imu.gyro_z])
     cmd = np.array([0.0, 0.0])
     last_action = np.zeros(len(actuator_ids))  # Add last action to observation
-    
+
     observation = np.concatenate([pos_obs, vel_obs, imu_obs, cmd, last_action], axis=-1)
     return observation
+
 
 async def send_actions(kos: pykos.KOS, position: np.ndarray, actuator_mapping: dict) -> None:
     """Send actions using actuator mapping from metadata."""
     position = np.rad2deg(position)
-    
+
     # Create commands sorted by nn_id to match position array
     sorted_by_nn = sorted(actuator_mapping.items(), key=lambda x: x[1]["nn_id"])
     actuator_commands: list[pykos.services.actuator.ActuatorCommand] = [
@@ -97,9 +99,10 @@ async def send_actions(kos: pykos.KOS, position: np.ndarray, actuator_mapping: d
         }
         for actuator_id, mapping in sorted_by_nn
     ]
-    
+
     logger.debug(actuator_commands)
     await kos.actuator.command_actuators(actuator_commands)
+
 
 def load_feetech_params(actuator_params_path: str) -> tuple[dict, dict]:
     """Load Feetech parameters from files."""
@@ -123,7 +126,9 @@ def load_feetech_params(actuator_params_path: str) -> tuple[dict, dict]:
     return params_3215, params_3250
 
 
-async def configure_actuators(kos: pykos.KOS, robot_urdf_path: str, actuator_params_path: str, metadata_path: str | None = None) -> None:
+async def configure_actuators(
+    kos: pykos.KOS, robot_urdf_path: str, actuator_params_path: str, metadata_path: str | None = None
+) -> None:
     """Configure actuators using parameters from files."""
     # Load the Feetech parameters
     sts3215_params, sts3250_params = load_feetech_params(actuator_params_path)
@@ -135,10 +140,10 @@ async def configure_actuators(kos: pykos.KOS, robot_urdf_path: str, actuator_par
 
     if not metadata_file.exists():
         raise FileNotFoundError(f"Metadata file not found at {metadata_file}")
-    
+
     with open(metadata_file, "r") as f:
         metadata = json.load(f)
-    
+
     joint_metadata = metadata.get("joint_name_to_metadata", {})
 
     # Configure each actuator from metadata
@@ -149,22 +154,27 @@ async def configure_actuators(kos: pykos.KOS, robot_urdf_path: str, actuator_par
             kp = float(joint_info["kp"])
             kd = float(joint_info["kd"])
         except (KeyError, ValueError) as e:
-            logger.error(f"Invalid metadata for joint {joint_name}: {e}")
-            exit(1)
-               
+            logger.error("Invalid metadata for joint %s: %s for joint %s", joint_name, e, joint_info)
+            raise e
+
         # Determine max_torque based on actuator type
         if "feetech-sts3215" in actuator_type:
             max_torque = sts3215_params["max_torque"]
         elif "feetech-sts3250" in actuator_type:
             max_torque = sts3250_params["max_torque"]
         else:
-            logger.error(f"Unknown actuator type {actuator_type} for joint {joint_name}")
-            exit(1)
+            logger.error("Unknown actuator type %s for joint %s", actuator_type, joint_name)
+            raise ValueError(f"Unknown actuator type {actuator_type} for joint {joint_name}")
 
         # Configure the actuator through KOS API
         logger.info(
-            "Configuring actuator %d (%s): type=%s, kp=%f, kd=%f, max_torque=%f", 
-            actuator_id, joint_name, actuator_type, kp, kd, max_torque
+            "Configuring actuator %d (%s): type=%s, kp=%f, kd=%f, max_torque=%f",
+            actuator_id,
+            joint_name,
+            actuator_type,
+            kp,
+            kd,
+            max_torque,
         )
         await kos.actuator.configure_actuator(
             actuator_id=actuator_id,
@@ -173,6 +183,7 @@ async def configure_actuators(kos: pykos.KOS, robot_urdf_path: str, actuator_par
             torque_enabled=True,
             max_torque=max_torque,
         )
+
 
 async def reset(kos: pykos.KOS, actuator_mapping: dict) -> None:
     """Reset the robot to a starting position."""
@@ -215,12 +226,12 @@ def spawn_kos_sim(no_render: bool) -> tuple[subprocess.Popen, Callable]:
 
 
 async def main(
-    model_path: str, 
-    ip: str, 
-    no_render: bool, 
-    episode_length: int, 
-    robot_urdf_path: str, 
-    actuator_params_path: str, 
+    model_path: str,
+    ip: str,
+    no_render: bool,
+    episode_length: int,
+    robot_urdf_path: str,
+    actuator_params_path: str,
     metadata_path: str | None = None,
 ) -> None:
     model = tf.saved_model.load(model_path)
@@ -251,7 +262,7 @@ async def main(
 
         if attempts == 5:
             raise RuntimeError("Failed to connect to KOS-Sim")
-        
+
     # Determine metadata path
     if metadata_path:
         metadata_file = Path(metadata_path)
@@ -260,7 +271,7 @@ async def main(
 
     if not metadata_file.exists():
         raise FileNotFoundError(f"Metadata file not found at {metadata_file}")
-    
+
     actuator_mapping = load_actuator_mapping(metadata_file)
     # Configure actuators with metadata and parameter files
     await configure_actuators(kos, robot_urdf_path, actuator_params_path, metadata_path)
@@ -343,7 +354,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--metadata_path",
         type=str,
-        help="Path to metadata.json file. If not specified, will look in robot_urdf_path/metadata.json"
+        help="Path to metadata.json file. If not specified, will look in robot_urdf_path/metadata.json",
     )
     args = parser.parse_args()
 

@@ -7,27 +7,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Generic, Optional, Sequence, TypedDict, TypeVar, Union
 
-import distrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import ksim
 import mujoco
 import numpy as np
-import optax
 import xax
 from jaxtyping import Array, PRNGKeyArray
 from ksim.actuators import Actuators, NoiseType
-from ksim.types import PhysicsData, PhysicsState
+from ksim.types import PhysicsData
 from mujoco import mjx
 from mujoco_scenes.mjcf import load_mjmodel
 from scipy.optimize import curve_fit
 from xax.nn.export import export
-from xax.utils.types.frozen_dict import FrozenDict
 
 logger = logging.getLogger(__name__)
-
-
 
 
 @jax.tree_util.register_dataclass
@@ -90,7 +85,7 @@ class FeetechParams(TypedDict):
 
 
 class FeetechActuators(Actuators):
-    """Feetech actuator controller"""
+    """Feetech actuator controller."""
 
     def __init__(
         self,
@@ -101,7 +96,7 @@ class FeetechActuators(Actuators):
         max_pwm_j: Array,
         vin_j: Array,
         kt_j: Array,
-        R_j: Array,
+        r_j: Array,
         dt: float,
         error_gain_data_j: list[ErrorGainData],  # Mandatory
         action_noise: float = 0.0,
@@ -116,7 +111,7 @@ class FeetechActuators(Actuators):
         self.max_pwm_j = max_pwm_j
         self.vin_j = vin_j
         self.kt_j = kt_j
-        self.R_j = R_j
+        self.r_j = r_j
         self.dt = dt
         self.prev_qtarget_j = jnp.zeros_like(self.kp_j)
 
@@ -124,12 +119,12 @@ class FeetechActuators(Actuators):
         self.action_noise_type = action_noise_type
         self.torque_noise = torque_noise
         self.torque_noise_type = torque_noise_type
-        
+
         j = kp_j.shape[0]  # num outputs
 
-        self.a_params = jnp.array([0.00005502] * j) # 3250 params by default 
-        self.b_params = jnp.array([0.16293639] * j) # 3250 params by default 
-        
+        self.a_params = jnp.array([0.00005502] * j)  # 3250 params by default
+        self.b_params = jnp.array([0.16293639] * j)  # 3250 params by default
+
         # Default min/max values for error clamping
         default_min = 0.001
         default_max = 0.15
@@ -143,7 +138,6 @@ class FeetechActuators(Actuators):
 
         # Fit a/x + b parameters for each actuator
         for i, err_data in enumerate(error_gain_data_j):
-
             if err_data is None or len(err_data) < 3:
                 logger.warning("Actuator %d: Not enough error_gain_data. Using default values.", i)
                 continue
@@ -153,18 +147,20 @@ class FeetechActuators(Actuators):
             if len(set(x_vals)) != len(x_vals):
                 logger.warning("Actuator %d: Duplicate pos_err. Using default values.", i)
                 continue
-            
+
             # Record min/max error values for clamping
             min_err = float(np.min(x_vals))
             max_err = float(np.max(x_vals))
             self.pos_err_min = self.pos_err_min.at[i].set(min_err)
             self.pos_err_max = self.pos_err_max.at[i].set(max_err)
             logger.info("Actuator %d: Error range [%f, %f]", i, min_err, max_err)
-                
+
             y_vals = np.array([d["error_gain"] for d in err_data_sorted])
             try:
-                def inverse_func(x, a, b):
-                    return a/x + b
+
+                def inverse_func(x: Array, a: Array, b: Array) -> Array:
+                    return a / x + b
+
                 # Fit the a/x + b function to the data
                 popt, _ = curve_fit(inverse_func, x_vals, y_vals)
                 a_opt, b_opt = popt
@@ -172,10 +168,13 @@ class FeetechActuators(Actuators):
                 self.b_params = self.b_params.at[i].set(float(b_opt))
                 logger.info("Actuator %d: Fitted parameters a=%f, b=%f", i, a_opt, b_opt)
             except Exception as e:
-                logger.warning("Actuator %d: Error fitting curve: %s. Using default values a=%f, b=%f.", i, e, self.a_params[i], self.b_params[i])        
-
-        
-
+                logger.warning(
+                    "Actuator %d: Error fitting curve: %s. Using default values a=%f, b=%f.",
+                    i,
+                    e,
+                    self.a_params[i],
+                    self.b_params[i],
+                )
 
     def _eval_reciprocal_func(self, x_val: Array, a: Array, b: Array) -> Array:
         """Evaluate a/x + b function for error gain calculation."""
@@ -216,7 +215,7 @@ class FeetechActuators(Actuators):
 
         # Compute torque
         volts_j = duty_j * self.vin_j
-        torque_j = volts_j * self.kt_j / self.R_j
+        torque_j = volts_j * self.kt_j / self.r_j
 
         # Add noise to torque
         torque_j_noisy = self.add_noise(self.torque_noise, self.torque_noise_type, torque_j, tor_rng)
@@ -469,7 +468,7 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
             max_pwm_j = jnp.zeros(num_joints)
             vin_j = jnp.zeros(num_joints)
             kt_j = jnp.zeros(num_joints)
-            R_j = jnp.zeros(num_joints)
+            r_j = jnp.zeros(num_joints)
             kp_j = jnp.zeros(num_joints)
             kd_j = jnp.zeros(num_joints)
 
@@ -508,7 +507,7 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
                     max_pwm_j = max_pwm_j.at[i].set(sts3215_params["max_pwm"])
                     vin_j = vin_j.at[i].set(sts3215_params["vin"])
                     kt_j = kt_j.at[i].set(sts3215_params["kt"])
-                    R_j = R_j.at[i].set(sts3215_params["R"])
+                    r_j = r_j.at[i].set(sts3215_params["R"])
                     error_gain_data_list_j.append(sts3215_params["error_gain_data"])
                 elif "feetech-sts3250" in actuator_type:
                     max_torque_j = max_torque_j.at[i].set(sts3250_params["max_torque"])
@@ -516,7 +515,7 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
                     max_pwm_j = max_pwm_j.at[i].set(sts3250_params["max_pwm"])
                     vin_j = vin_j.at[i].set(sts3250_params["vin"])
                     kt_j = kt_j.at[i].set(sts3250_params["kt"])
-                    R_j = R_j.at[i].set(sts3250_params["R"])
+                    r_j = r_j.at[i].set(sts3250_params["R"])
                     error_gain_data_list_j.append(sts3250_params["error_gain_data"])
                 else:
                     raise ValueError(f"Unknown or unsupported actuator type '{actuator_type}' for joint {joint_name}")
@@ -545,7 +544,7 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
             max_pwm_j=max_pwm_j,
             vin_j=vin_j,
             kt_j=kt_j,
-            R_j=R_j,
+            r_j=r_j,
             kp_j=kp_j,
             kd_j=kd_j,
             dt=self.config.dt,
