@@ -247,24 +247,13 @@ class ZbotActor(eqx.Module):
             [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], axis=-1
         )  # (NUM_INPUTS)
 
-        # Split the output into mean and standard deviation.
-        prediction_n = self.mlp(x_n)
-        mean_n = prediction_n[..., :NUM_OUTPUTS]
-        std_n = prediction_n[..., NUM_OUTPUTS:]
-
-        # Scale the mean.
-        mean_n = jnp.tanh(mean_n) * self.mean_scale
-
-        # Softplus and clip to ensure positive standard deviations.
-        std_n = jnp.clip((jax.nn.softplus(std_n) + self.min_std) * self.var_scale, max=self.max_std)
-
-        # Return position-only distribution
-        return distrax.Normal(mean_n, std_n)
+        return self.call_flat_obs(x_n)
 
     def call_flat_obs(
         self,
         flat_obs_n: Array,
     ) -> distrax.Normal:
+        # Split the output into mean and standard deviation.
         prediction_n = self.mlp(flat_obs_n)
         mean_n = prediction_n[..., :NUM_OUTPUTS]
         std_n = prediction_n[..., NUM_OUTPUTS:]
@@ -275,6 +264,7 @@ class ZbotActor(eqx.Module):
         # Softplus and clip to ensure positive standard deviations.
         std_n = jnp.clip((jax.nn.softplus(std_n) + self.min_std) * self.var_scale, max=self.max_std)
 
+        # Return position-only distribution
         return distrax.Normal(mean_n, std_n)
 
 
@@ -306,7 +296,13 @@ class ZbotCritic(eqx.Module):
         x_n = jnp.concatenate(
             [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], axis=-1
         )  # (NUM_INPUTS)
-        return self.mlp(x_n)
+        return self.call_flat_obs(x_n)
+        
+    def call_flat_obs(
+        self,
+        flat_obs_n: Array,
+    ) -> Array:
+        return self.mlp(flat_obs_n)
 
 
 class ZbotModel(eqx.Module):
@@ -459,11 +455,6 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
     ) -> distrax.Normal:
-        # Debugging: print available observation keys and shapes
-        import logging
-
-        # logging.info(f"Available observation keys: {list(observations.keys())}")
-
         joint_pos_n = observations["dhjoint_position_observation"]
         joint_vel_n = observations["dhjoint_velocity_observation"]
         imu_acc_3 = observations["sensor_observation_imu_acc"]
@@ -472,21 +463,14 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         last_action_n = observations["last_action_observation"]
         history_n = observations["history_observation"]
 
-        # Log shapes for debugging
-        # logging.info(f"joint_pos_n shape: {joint_pos_n.shape}")
-        # logging.info(f"joint_vel_n shape: {joint_vel_n.shape}")
-        # logging.info(f"imu_acc_3 shape: {imu_acc_3.shape}")
-        # logging.info(f"imu_gyro_3 shape: {imu_gyro_3.shape}")
-        # logging.info(f"lin_vel_cmd_2 shape: {lin_vel_cmd_2.shape}")
-        # logging.info(f"last_action_n shape: {last_action_n.shape}")
-        # logging.info(f"history_n shape: {history_n.shape}")
-
+        # Concatenate inputs like the humanoid example
         x_n = jnp.concatenate(
-            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], axis=-1
+            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], 
+            axis=-1
         )
-        logging.info("Concatenated input shape: %s", x_n.shape)
-
-        return model.actor(joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n)
+        
+        # Call the actor with a flat observation tensor
+        return model.actor.call_flat_obs(x_n)
 
     def _run_critic(
         self,
@@ -501,100 +485,47 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         lin_vel_cmd_2 = commands["linear_velocity_step_command"]
         last_action_n = observations["last_action_observation"]
         history_n = observations["history_observation"]
-        return model.critic(joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n)
-
-    def get_on_policy_log_probs(
-        self,
-        model: ZbotModel,
-        trajectories: ksim.Trajectory,
-        rng: PRNGKeyArray,
-    ) -> Array:
-        if trajectories.aux_outputs is None:
-            raise ValueError("No aux outputs found in trajectories")
-        return trajectories.aux_outputs.log_probs
-
-    def get_on_policy_values(
-        self,
-        model: ZbotModel,
-        trajectories: ksim.Trajectory,
-        rng: PRNGKeyArray,
-    ) -> Array:
-        if trajectories.aux_outputs is None:
-            raise ValueError("No aux outputs found in trajectories")
-        # Ensure aux_outputs has the expected structure
-        if not isinstance(trajectories.aux_outputs, AuxOutputs) or not hasattr(trajectories.aux_outputs, "values"):
-            raise TypeError(f"Expected AuxOutputs with 'values', got {type(trajectories.aux_outputs)}")
-        return trajectories.aux_outputs.values
-
-    def get_on_policy_variables(
-        self, model: ZbotModel, trajectories: ksim.Trajectory, rng: PRNGKeyArray
-    ) -> PPOVariables:
-        """Gets PPO variables using the policy that generated the trajectory."""
-        if trajectories.aux_outputs is None:
-            raise ValueError("No aux outputs found in trajectories")
-        if not isinstance(trajectories.aux_outputs, AuxOutputs):
-            raise TypeError(f"Expected AuxOutputs, got {type(trajectories.aux_outputs)}")
-        if not hasattr(trajectories.aux_outputs, "log_probs") or not hasattr(trajectories.aux_outputs, "values"):
-            raise AttributeError("AuxOutputs object missing required attributes 'log_probs' or 'values'")
-
-        return PPOVariables(
-            log_probs=trajectories.aux_outputs.log_probs,
-            values=trajectories.aux_outputs.values,
+        
+        # Concatenate inputs
+        x_n = jnp.concatenate(
+            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], 
+            axis=-1
         )
+        
+        # Call critic with flat observation tensor
+        return model.critic.call_flat_obs(x_n)
 
-    def get_off_policy_variables(
-        self, model: ZbotModel, trajectories: ksim.Trajectory, rng: PRNGKeyArray
-    ) -> PPOVariables:
-        """Gets PPO variables using the current (potentially updated) policy."""
-        # Recalculate log_probs with the current model
-        par_actor_fn = jax.vmap(self._run_actor, in_axes=(None, 0, 0))
-        action_dist_btn = par_actor_fn(model, trajectories.obs, trajectories.command)
-        log_probs_tn = action_dist_btn.log_prob(trajectories.action)
-
-        # Recalculate values with the current model
-        par_critic_fn = jax.vmap(self._run_critic, in_axes=(None, 0, 0))
-        values_bt1 = par_critic_fn(model, trajectories.obs, trajectories.command)
-        values_t = values_bt1.squeeze(-1)
-
-        # Optionally compute entropy here if needed for entropy bonus
-        # entropy_tn = action_dist_btn.entropy()
-
-        return PPOVariables(
-            log_probs=log_probs_tn,
-            values=values_t,
-            # entropy=entropy_tn, # Uncomment if using entropy bonus
+    def get_ppo_variables(
+        self,
+        model: ZbotModel,
+        trajectories: ksim.Trajectory,
+        carry: PyTree,
+        rng: PRNGKeyArray,
+    ) -> tuple[ksim.PPOVariables, PyTree]:
+        """Gets the variables required for computing PPO loss."""
+        # Extract individual tensors from observations and commands, then reshape for batching
+        joint_pos_n = trajectories.obs["dhjoint_position_observation"]  # (..., N)
+        joint_vel_n = trajectories.obs["dhjoint_velocity_observation"]  # (..., N)
+        imu_acc_3 = trajectories.obs["sensor_observation_imu_acc"]  # (..., 3)
+        imu_gyro_3 = trajectories.obs["sensor_observation_imu_gyro"]  # (..., 3)
+        lin_vel_cmd_2 = trajectories.command["linear_velocity_step_command"]  # (..., 2)
+        last_action_n = trajectories.obs["last_action_observation"]  # (..., N)
+        history_n = trajectories.obs["history_observation"]  # (..., 0)
+        
+        # Concatenate inputs to create a single tensor for each batch item
+        flat_obs = jnp.concatenate(
+            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n],
+            axis=-1
         )
-
-    def get_log_probs(
-        self,
-        model: ZbotModel,
-        trajectories: ksim.Trajectory,
-        rng: PRNGKeyArray,
-    ) -> tuple[Array, Array]:
-        # Vectorize over both batch and time dimensions.
-        par_fn = jax.vmap(self._run_actor, in_axes=(None, 0, 0))
-        action_dist_btn = par_fn(model, trajectories.obs, trajectories.command)
-
-        # Compute the log probabilities of the trajectory's actions according
-        # to the current policy, along with the entropy of the distribution.
-        action_btn = trajectories.action
-        log_probs_btn = action_dist_btn.log_prob(action_btn)
-        entropy_btn = action_dist_btn.entropy()
-
-        return log_probs_btn, entropy_btn
-
-    def get_values(
-        self,
-        model: ZbotModel,
-        trajectories: ksim.Trajectory,
-        rng: PRNGKeyArray,
-    ) -> Array:
-        # Vectorize over both batch and time dimensions.
-        par_fn = jax.vmap(self._run_critic, in_axes=(None, 0, 0))
-        values_bt1 = par_fn(model, trajectories.obs, trajectories.command)
-
-        # Remove the last dimension.
-        return values_bt1.squeeze(-1)
+        
+        # Call actor and critic directly with batched inputs
+        action_dist = model.actor.call_flat_obs(flat_obs)
+        log_probs = action_dist.log_prob(trajectories.action)
+        
+        values = model.critic.call_flat_obs(flat_obs).squeeze(-1)
+        
+        # Return PPO variables and carry
+        return ksim.PPOVariables(log_probs=log_probs, values=values), carry
 
     def sample_action(
         self,
@@ -608,12 +539,7 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
     ) -> ksim.Action:
         action_dist_n = self._run_actor(model, observations, commands)
         action_n = action_dist_n.sample(seed=rng) * self.config.action_scale
-        action_log_prob_n = action_dist_n.log_prob(action_n)
-
-        critic_n = self._run_critic(model, observations, commands)
-        value_n = critic_n.squeeze(-1)
-
-        # For history tracking (not used with HISTORY_LENGTH = 0)
+        
         if HISTORY_LENGTH > 0:
             joint_pos_n = observations["dhjoint_position_observation"]
             joint_vel_n = observations["dhjoint_velocity_observation"]
@@ -643,25 +569,7 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         else:
             history_n = jnp.zeros(0)
 
-        return ksim.Action(
-            action=action_n,
-            carry=history_n,
-            aux_outputs=AuxOutputs(log_probs=action_log_prob_n, values=value_n)
-        )
-
-    def get_ppo_variables(
-        self,
-        model: ZbotModel,
-        trajectories: ksim.Trajectory,
-        carry: PyTree,
-        rng: PRNGKeyArray,
-    ) -> tuple[PPOVariables, PyTree]:
-        """Gets the variables required for computing PPO loss."""
-        # Use the on_policy_variables method to get PPO variables from the trajectory
-        ppo_variables = self.get_on_policy_variables(model, trajectories, rng)
-        
-        # Return the variables and carry (carry is unchanged)
-        return ppo_variables, carry
+        return ksim.Action(action=action_n, carry=history_n, aux_outputs=None)
 
 
 if __name__ == "__main__":

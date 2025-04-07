@@ -250,10 +250,6 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
         """Returns a list of shapes expected by the exported model's inference function."""
         raise NotImplementedError()
 
-    @abc.abstractmethod
-    def get_optimizer(self) -> optax.GradientTransformation:
-        raise NotImplementedError()
-
     def get_mujoco_model(self) -> mujoco.MjModel:
         # mjcf_path = (Path(self.config.robot_urdf_path) / "scene.mjcf").resolve().as_posix()
         mjcf_path = (Path(self.config.robot_urdf_path) / "robot.mjcf").resolve().as_posix()
@@ -572,109 +568,6 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
             torque_noise=0.0,
             torque_noise_type="none",
         )
-
-    @abc.abstractmethod
-    def get_randomization(self, physics_model: ksim.PhysicsModel) -> list[ksim.Randomization]:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def get_resets(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reset]:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def get_events(self, physics_model: ksim.PhysicsModel) -> list[ksim.Event]:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def get_observations(self, physics_model: ksim.PhysicsModel) -> list[ksim.Observation]:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def get_commands(self, physics_model: ksim.PhysicsModel) -> list[ksim.Command]:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def get_rewards(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reward]:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def get_terminations(self, physics_model: ksim.PhysicsModel) -> list[ksim.Termination]:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def get_model(self, key: PRNGKeyArray) -> ZbotModel:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def get_initial_carry(self, rng: PRNGKeyArray) -> Array:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def _run_actor(
-        self,
-        model: ZbotModel,
-        observations: FrozenDict[str, Array],
-        commands: FrozenDict[str, Array],
-    ) -> distrax.Normal:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def _run_critic(
-        self,
-        model: ZbotModel,
-        observations: FrozenDict[str, Array],
-        commands: FrozenDict[str, Array],
-    ) -> Array:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def get_on_policy_log_probs(
-        self,
-        model: ZbotModel,
-        trajectories: ksim.Trajectory,
-        rng: PRNGKeyArray,
-    ) -> Array:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def get_on_policy_values(
-        self,
-        model: ZbotModel,
-        trajectories: ksim.Trajectory,
-        rng: PRNGKeyArray,
-    ) -> Array:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def get_log_probs(
-        self,
-        model: ZbotModel,
-        trajectories: ksim.Trajectory,
-        rng: PRNGKeyArray,
-    ) -> tuple[Array, Array]:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def get_values(
-        self,
-        model: ZbotModel,
-        trajectories: ksim.Trajectory,
-        rng: PRNGKeyArray,
-    ) -> Array:
-        raise NotImplementedError()
-
-    @abc.abstractmethod
-    def sample_action(
-        self,
-        model: ZbotModel,
-        carry: Array,
-        physics_model: ksim.PhysicsModel,
-        physics_state: PhysicsState,
-        observations: FrozenDict[str, Array],
-        commands: FrozenDict[str, Array],
-        rng: PRNGKeyArray,
-    ) -> tuple[Array, Array, AuxOutputs]:
-        raise NotImplementedError()
 
     def make_export_model(self, model: ZbotModel, stochastic: bool = False, batched: bool = False) -> Callable:
         """Makes a callable inference function that directly takes a flattened input vector and returns an action.
