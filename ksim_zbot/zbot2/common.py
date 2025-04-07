@@ -57,7 +57,7 @@ class ZbotTaskConfig(ksim.PPOConfig):
 
     # Rendering parameters.
     render_track_body_id: int | None = xax.field(
-        value=None,
+        value=0,
         help="The body id to track with the render camera.",
     )
 
