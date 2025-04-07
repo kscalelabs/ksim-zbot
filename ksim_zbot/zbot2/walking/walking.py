@@ -11,7 +11,7 @@ import jax.numpy as jnp
 import ksim
 import optax
 import xax
-from jaxtyping import Array, PRNGKeyArray
+from jaxtyping import Array, PRNGKeyArray, PyTree
 from ksim.curriculum import ConstantCurriculum, Curriculum
 from ksim.observation import ObservationState
 from ksim.task.ppo import PPOVariables
@@ -426,8 +426,7 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
             DHHealthyReward(scale=0.5),
             DHControlPenalty(scale=-0.01),
             TerminationPenalty(scale=-5.0),
-            LinearVelocityTrackingReward(scale=1.0),
-            LinearVelocityTrackingReward(scale=1.0),
+            LinearVelocityTrackingReward(scale=2.0),
             AngularVelocityTrackingReward(scale=0.75),
             # NaiveVelocityReward(scale=1.0),
         ]
@@ -539,8 +538,8 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
             raise AttributeError("AuxOutputs object missing required attributes 'log_probs' or 'values'")
 
         return PPOVariables(
-            log_probs_tn=trajectories.aux_outputs.log_probs,
-            values_t=trajectories.aux_outputs.values,
+            log_probs=trajectories.aux_outputs.log_probs,
+            values=trajectories.aux_outputs.values,
         )
 
     def get_off_policy_variables(
@@ -561,9 +560,9 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         # entropy_tn = action_dist_btn.entropy()
 
         return PPOVariables(
-            log_probs_tn=log_probs_tn,
-            values_t=values_t,
-            # entropy_tn=entropy_tn, # Uncomment if using entropy bonus
+            log_probs=log_probs_tn,
+            values=values_t,
+            # entropy=entropy_tn, # Uncomment if using entropy bonus
         )
 
     def get_log_probs(
@@ -606,7 +605,7 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
         rng: PRNGKeyArray,
-    ) -> tuple[Array, Array, AuxOutputs]:
+    ) -> ksim.Action:
         action_dist_n = self._run_actor(model, observations, commands)
         action_n = action_dist_n.sample(seed=rng) * self.config.action_scale
         action_log_prob_n = action_dist_n.log_prob(action_n)
@@ -644,7 +643,25 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         else:
             history_n = jnp.zeros(0)
 
-        return action_n, history_n, AuxOutputs(log_probs=action_log_prob_n, values=value_n)
+        return ksim.Action(
+            action=action_n,
+            carry=history_n,
+            aux_outputs=AuxOutputs(log_probs=action_log_prob_n, values=value_n)
+        )
+
+    def get_ppo_variables(
+        self,
+        model: ZbotModel,
+        trajectories: ksim.Trajectory,
+        carry: PyTree,
+        rng: PRNGKeyArray,
+    ) -> tuple[PPOVariables, PyTree]:
+        """Gets the variables required for computing PPO loss."""
+        # Use the on_policy_variables method to get PPO variables from the trajectory
+        ppo_variables = self.get_on_policy_variables(model, trajectories, rng)
+        
+        # Return the variables and carry (carry is unchanged)
+        return ppo_variables, carry
 
 
 if __name__ == "__main__":
