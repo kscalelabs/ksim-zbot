@@ -591,7 +591,7 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
     def on_after_checkpoint_save(self, ckpt_path: Path, state: xax.State) -> xax.State:
         state = super().on_after_checkpoint_save(ckpt_path, state)
 
-        model: ZbotModel = self.load_checkpoint(ckpt_path, part="model")
+        model: ZbotModel = self.load_checkpoint(ckpt_path, part="model", model_template=self.get_model(jax.random.PRNGKey(0)))
 
         model_fn = self.make_export_model(model, stochastic=False, batched=True)
 
