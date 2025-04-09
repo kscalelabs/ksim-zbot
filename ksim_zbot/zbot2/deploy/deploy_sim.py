@@ -59,7 +59,9 @@ def load_actuator_mapping(metadata_path: str | Path) -> dict:
     return actuator_mapping
 
 
-async def get_observation(kos: pykos.KOS, actuator_mapping: dict) -> np.ndarray:
+async def get_observation(
+    kos: pykos.KOS, actuator_mapping: dict, prev_action: np.ndarray, cmd: np.ndarray = np.array([0.15, 0.0])
+) -> np.ndarray:
     """Get observation using actuator mapping from metadata."""
     actuator_ids = list(actuator_mapping.keys())
 
@@ -79,8 +81,8 @@ async def get_observation(kos: pykos.KOS, actuator_mapping: dict) -> np.ndarray:
     vel_obs = np.deg2rad([state_dict_vel[act_id] for act_id, _ in sorted_by_nn])
 
     imu_obs = np.array([imu.accel_x, imu.accel_y, imu.accel_z, imu.gyro_x, imu.gyro_y, imu.gyro_z])
-    cmd = np.array([0.0, 0.0])
-    last_action = np.zeros(len(actuator_ids))  # Add last action to observation
+
+    last_action = prev_action  # Add last action to observation
 
     observation = np.concatenate([pos_obs, vel_obs, imu_obs, cmd, last_action], axis=-1)
     return observation
@@ -277,7 +279,9 @@ async def main(
     await configure_actuators(kos, robot_urdf_path, actuator_params_path, metadata_path)
     await reset(kos, actuator_mapping)
 
-    observation = (await get_observation(kos, actuator_mapping)).reshape(1, -1)
+    prev_action = np.zeros(len(actuator_mapping))
+
+    observation = (await get_observation(kos, actuator_mapping, prev_action)).reshape(1, -1)
 
     if no_render:
         await kos.process_manager.start_kclip("deployment")
@@ -286,7 +290,7 @@ async def main(
     model.infer(observation)
 
     target_time = time.time() + DT
-    observation = await get_observation(kos, actuator_mapping)
+    observation = await get_observation(kos, actuator_mapping, prev_action)
 
     end_time = time.time() + episode_length
 
@@ -294,12 +298,13 @@ async def main(
         while time.time() < end_time:
             observation = observation.reshape(1, -1)
             # Model only outputs position commands
-            position = np.array(model.infer(observation)).reshape(-1)
+            action = np.array(model.infer(observation)).reshape(-1)
             observation, _ = await asyncio.gather(
-                get_observation(kos, actuator_mapping),
-                send_actions(kos, position, actuator_mapping),
+                get_observation(kos, actuator_mapping, prev_action),
+                send_actions(kos, action, actuator_mapping),
             )
 
+            prev_action = action
             if time.time() < target_time:
                 await asyncio.sleep(max(0, target_time - time.time()))
             else:
@@ -328,7 +333,7 @@ async def main(
 
 
 # (optionally) start the KOS-Sim server before running this script
-# `kos-sim kbot2-feet`
+# `kos-sim zbot2-feet`
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, required=True)
