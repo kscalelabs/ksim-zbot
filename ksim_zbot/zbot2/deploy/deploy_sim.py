@@ -16,11 +16,11 @@ from typing import Callable
 import numpy as np
 import pykos
 import tensorflow as tf
+import xml.etree.ElementTree as ET
 
 logger = logging.getLogger(__name__)
 
 DT = 0.02  # Policy time step (50Hz)
-
 
 @dataclass
 class Actuator:
@@ -31,30 +31,43 @@ class Actuator:
     max_torque: float
     joint_name: str
 
-
 def load_actuator_mapping(metadata_path: str | Path) -> dict:
-    """Load actuator mapping from metadata file."""
+    """Load actuator mapping using MuJoCo model joint order but return actuator_id keyed mapping."""
+    metadata_path = Path(metadata_path)
+    mjcf_path = metadata_path.parent / "robot.mjcf"
+    
+    # Load metadata
     with open(metadata_path, "r") as f:
         metadata = json.load(f)
-
     joint_metadata = metadata.get("joint_name_to_metadata", {})
 
-    # Create mapping of actuator IDs to neural network IDs (sorted by actuator ID)
+    # Parse MJCF to get joint order
+    tree = ET.parse(mjcf_path)
+    root = tree.getroot()
+
+    # Get ordered list of joints from MuJoCo model, excluding floating base
+    mujoco_joints = []
+    for joint in root.findall(".//joint"):
+        joint_name = joint.get("name")
+        if joint_name != "floating_base":
+            mujoco_joints.append(joint_name)
+
+    # Create mapping with actuator_id as key, maintaining MuJoCo order for nn_ids
     actuator_mapping = {}
-    for joint_name, info in joint_metadata.items():
-        try:
-            actuator_id = int(info["id"])
+    for nn_id, joint_name in enumerate(mujoco_joints):
+        if joint_name in joint_metadata:
+            actuator_id = int(joint_metadata[joint_name]["id"])
             actuator_mapping[actuator_id] = {
                 "joint_name": joint_name,
-                "nn_id": None,  # Will be filled based on sorted order
+                "nn_id": nn_id - 1  # MuJoCo uses 0-based indexing
             }
-        except (KeyError, ValueError) as e:
-            logger.warning("Invalid actuator ID for joint %s: %s", joint_name, e)
-            continue
+        else:
+            logger.warning(f"Joint {joint_name} not found in metadata")
 
-    # Assign nn_ids based on sorted actuator IDs
-    for nn_id, actuator_id in enumerate(sorted(actuator_mapping.keys())):
-        actuator_mapping[actuator_id]["nn_id"] = nn_id
+    # Log the mapping for verification
+    logger.info("Actuator mapping (MuJoCo order):")
+    for actuator_id, mapping in sorted(actuator_mapping.items(), key=lambda x: x[1]["nn_id"]):
+        logger.info(f"Joint: {mapping['joint_name']:20} nn_id: {mapping['nn_id']:2d} actuator_id: {actuator_id:2d}")
 
     return actuator_mapping
 
@@ -70,15 +83,14 @@ async def get_observation(
         kos.imu.get_imu_values(),
     )
 
-    # Create arrays sorted by nn_id
-    sorted_by_nn = sorted(actuator_mapping.items(), key=lambda x: x[1]["nn_id"])
+    nn_id_to_actuator_id = list(actuator_mapping.items())
 
     # Build position and velocity observations
     state_dict_pos = {state.actuator_id: state.position for state in actuator_states.states}
     state_dict_vel = {state.actuator_id: state.velocity for state in actuator_states.states}
 
-    pos_obs = np.deg2rad([state_dict_pos[act_id] for act_id, _ in sorted_by_nn])
-    vel_obs = np.deg2rad([state_dict_vel[act_id] for act_id, _ in sorted_by_nn])
+    pos_obs = np.deg2rad([state_dict_pos[act_id] for act_id, _ in nn_id_to_actuator_id])
+    vel_obs = np.deg2rad([state_dict_vel[act_id] for act_id, _ in nn_id_to_actuator_id])
 
     imu_obs = np.array([imu.accel_x, imu.accel_y, imu.accel_z, imu.gyro_x, imu.gyro_y, imu.gyro_z])
 
@@ -91,18 +103,14 @@ async def get_observation(
 async def send_actions(kos: pykos.KOS, position: np.ndarray, actuator_mapping: dict) -> None:
     """Send actions using actuator mapping from metadata."""
     position = np.rad2deg(position)
-
-    # Create commands sorted by nn_id to match position array
-    sorted_by_nn = sorted(actuator_mapping.items(), key=lambda x: x[1]["nn_id"])
+    nn_id_to_actuator_id = list(actuator_mapping.items())
     actuator_commands: list[pykos.services.actuator.ActuatorCommand] = [
         {
             "actuator_id": actuator_id,
             "position": position[mapping["nn_id"]],
         }
-        for actuator_id, mapping in sorted_by_nn
+        for actuator_id, mapping in nn_id_to_actuator_id
     ]
-
-    logger.debug(actuator_commands)
     await kos.actuator.command_actuators(actuator_commands)
 
 
@@ -169,15 +177,6 @@ async def configure_actuators(
             raise ValueError(f"Unknown actuator type {actuator_type} for joint {joint_name}")
 
         # Configure the actuator through KOS API
-        logger.info(
-            "Configuring actuator %d (%s): type=%s, kp=%f, kd=%f, max_torque=%f",
-            actuator_id,
-            joint_name,
-            actuator_type,
-            kp,
-            kd,
-            max_torque,
-        )
         await kos.actuator.configure_actuator(
             actuator_id=actuator_id,
             kp=kp,
