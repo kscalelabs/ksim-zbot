@@ -14,23 +14,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pykos
 import tensorflow as tf
 
 logger = logging.getLogger(__name__)
 
-# Store IMU values for plotting
-imu_values: dict[str, list[float]] = {
-    "accel_x": [],
-    "accel_y": [],
-    "accel_z": [],
-    "gyro_x": [],
-    "gyro_y": [],
-    "gyro_z": [],
-    "steps": [],
-}
 step_counter = 0
 ip = None  # Global IP variable
 
@@ -94,7 +83,6 @@ async def get_observation(
     kos: pykos.KOS, actuator_mapping: dict, prev_action: np.ndarray, cmd: np.ndarray = np.array([0.15, 0.0])
 ) -> np.ndarray:
     """Get observation using actuator mapping from metadata."""
-    global step_counter
     actuator_ids = list(actuator_mapping.keys())
 
     (actuator_states, imu) = await asyncio.gather(
@@ -109,18 +97,7 @@ async def get_observation(
         imu.gyro_z = np.deg2rad(imu.gyro_z)
 
     gravity_bias = 9.81
-
     imu.accel_z = imu.accel_z + gravity_bias
-
-    # Store IMU values for plotting
-    imu_values["accel_x"].append(imu.accel_x)
-    imu_values["accel_y"].append(imu.accel_y)
-    imu_values["accel_z"].append(imu.accel_z)
-    imu_values["gyro_x"].append(imu.gyro_x)
-    imu_values["gyro_y"].append(imu.gyro_y)
-    imu_values["gyro_z"].append(imu.gyro_z)
-    imu_values["steps"].append(step_counter)
-    step_counter += 1
 
     nn_id_to_actuator_id = list(actuator_mapping.items())
 
@@ -387,35 +364,6 @@ async def main(
 
     if cleanup_fn:
         cleanup_fn()
-
-    # Plot IMU values
-    plt.figure(figsize=(12, 8))
-
-    # Plot accelerometer values
-    plt.subplot(2, 1, 1)
-    plt.plot(imu_values["steps"], imu_values["accel_x"], label="X")
-    plt.plot(imu_values["steps"], imu_values["accel_y"], label="Y")
-    plt.plot(imu_values["steps"], imu_values["accel_z"], label="Z")
-    plt.title("Accelerometer Values")
-    plt.xlabel("Simulation Step")
-    plt.ylabel("Acceleration")
-    plt.legend()
-    plt.grid(True)
-
-    # Plot gyroscope values
-    plt.subplot(2, 1, 2)
-    plt.plot(imu_values["steps"], imu_values["gyro_x"], label="X")
-    plt.plot(imu_values["steps"], imu_values["gyro_y"], label="Y")
-    plt.plot(imu_values["steps"], imu_values["gyro_z"], label="Z")
-    plt.title("Gyroscope Values")
-    plt.xlabel("Simulation Step")
-    plt.ylabel("Angular Velocity")
-    plt.legend()
-    plt.grid(True)
-
-    plt.tight_layout()
-    plt.savefig("imu_values.png")
-    plt.show()
 
 
 # (optionally) start the KOS-Sim server before running this script
