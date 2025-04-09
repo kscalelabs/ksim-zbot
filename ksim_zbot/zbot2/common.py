@@ -12,7 +12,6 @@ import jax
 import jax.numpy as jnp
 import ksim
 import mujoco
-import numpy as np
 import xax
 from jaxtyping import Array, PRNGKeyArray
 from kscale.web.gen.api import JointMetadataOutput
@@ -20,7 +19,6 @@ from ksim.actuators import Actuators, NoiseType
 from ksim.types import PhysicsData
 from mujoco import mjx
 from mujoco_scenes.mjcf import load_mjmodel
-from scipy.optimize import curve_fit
 from xax.nn.export import export
 
 logger = logging.getLogger(__name__)
@@ -82,7 +80,7 @@ class FeetechParams(TypedDict):
     R: float
     max_velocity: float
     max_pwm: float
-    error_gain_data: ErrorGainData
+    error_gain: float
 
 
 class FeetechActuators(Actuators):
@@ -120,10 +118,6 @@ class FeetechActuators(Actuators):
         self.action_noise_type = action_noise_type
         self.torque_noise = torque_noise
         self.torque_noise_type = torque_noise_type
-
-        j = kp_j.shape[0]  # num outputs
-        logger.info(f"Initializing {j} Feetech actuators")
-
 
     def get_ctrl(self, action_j: Array, physics_data: PhysicsData, rng: PRNGKeyArray) -> Array:
         """Compute torque control with velocity smoothing and duty cycle clipping (JAX friendly)."""
