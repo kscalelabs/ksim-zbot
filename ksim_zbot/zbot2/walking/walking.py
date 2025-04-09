@@ -12,12 +12,16 @@ import ksim
 import optax
 import xax
 from jaxtyping import Array, PRNGKeyArray, PyTree
+from typing import Self
 from ksim.curriculum import ConstantCurriculum, Curriculum
 from ksim.observation import ObservationState
 from ksim.types import PhysicsState
 from xax.utils.types.frozen_dict import FrozenDict
 
 from ksim_zbot.zbot2.common import ZbotTask, ZbotTaskConfig
+
+from ksim.utils.mujoco import get_qpos_data_idxs_by_name
+
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +85,17 @@ class JointDeviationPenalty(ksim.Reward):
             diff = trajectory.qpos[7:] - jnp.zeros_like(trajectory.qpos[7:])
             x = jnp.sum(jnp.square(diff))
         return x
+
+@attrs.define(frozen=True, kw_only=True)
+class TargetedJointDeviationPenalty(ksim.Reward):
+    """Penalty for joint deviations."""
+
+    norm: xax.NormType = attrs.field(default="l2")
+    joint_targets: tuple[float, ...] = attrs.field()
+
+    def __call__(self, trajectory: ksim.Trajectory) -> Array:
+        diff = trajectory.qpos[..., 7:] - jnp.array(self.joint_targets)
+        return xax.get_norm(diff, self.norm).sum(axis=-1)
 
 
 @attrs.define(frozen=True, kw_only=True)
@@ -174,6 +189,38 @@ class LinearVelocityTrackingReward(ksim.Reward):
             trajectory.command[self.command_name][..., :2] - trajectory.obs[self.linvel_obs_name][..., :2], self.norm
         ).sum(axis=-1)
         return jnp.exp(-lin_vel_error / self.error_scale)
+    
+@attrs.define(frozen=True, kw_only=True)
+class HipDeviationPenalty(ksim.Reward):
+    """Penalty for hip joint deviations."""
+
+    norm: xax.NormType = attrs.field(default="l2")
+    hip_indices: tuple[int, ...] = attrs.field()
+    joint_targets: tuple[float, ...] = attrs.field()
+
+    def __call__(self, trajectory: ksim.Trajectory) -> Array:
+        diff = (
+            trajectory.qpos[..., jnp.array(self.hip_indices)]
+            - jnp.array(self.joint_targets)[jnp.array(self.hip_indices)]
+        )
+        return xax.get_norm(diff, self.norm).sum(axis=-1)
+
+    @classmethod
+    def create(
+        cls,
+        physics_model: ksim.PhysicsModel,
+        hip_names: tuple[str, ...],
+        joint_targets: tuple[float, ...],
+        scale: float = -1.0,
+    ) -> Self:
+        """Create a sensor observation from a physics model."""
+        mappings = get_qpos_data_idxs_by_name(physics_model)
+        hip_indices = tuple([int(mappings[name][0]) - 7 for name in hip_names])
+        return cls(
+            hip_indices=hip_indices,
+            joint_targets=joint_targets,
+            scale=scale,
+        )
 
 
 @attrs.define(frozen=True, kw_only=True)
@@ -419,6 +466,12 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
 
     def get_rewards(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reward]:
         return [
+            HipDeviationPenalty.create(
+                physics_model=physics_model,
+                hip_names=("right_hip_roll", "left_hip_roll"),
+                joint_targets=(-0.20, 0.20),
+                scale=-1.0,
+            ),
             JointDeviationPenalty(scale=-1.0),
             DHControlPenalty(scale=-0.05),
             DHHealthyReward(scale=0.5),
