@@ -5,7 +5,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Generic, Optional, Sequence, TypedDict, TypeVar, Union
+from typing import Callable, Generic, Optional, Sequence, TypedDict, TypeVar, Union, cast
 
 import equinox as eqx
 import jax
@@ -180,7 +180,7 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
 
     def get_mujoco_model(self) -> mujoco.MjModel:
         mjcf_path = (Path(self.config.robot_urdf_path) / "robot.mjcf").resolve().as_posix()
-        print(f"Loading MJCF model from {mjcf_path}")
+        logger.info("Loading MJCF model from %s", mjcf_path)
         mj_model = load_mjmodel(mjcf_path, scene="smooth")
 
         metadata = self.get_mujoco_model_metadata(mj_model)
@@ -191,42 +191,39 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
         mj_model.opt.disableflags = mjx.DisableBit.EULERDAMP
         mj_model.opt.solver = mjx.SolverType.CG
 
-        sts3215_params_dict = self._load_feetech_params()
-        sts3215_params = sts3215_params_dict["sts3215"]
-        sts3250_params = sts3215_params_dict["sts3250"]
+        feetech_params_dict = self._load_feetech_params()
 
         required_keys = ["damping", "armature", "frictionloss", "max_torque"]
-        for key in required_keys:
-            if key not in sts3215_params:
-                raise ValueError(f"Missing required key '{key}' in sts3215 parameters.")
-            if key not in sts3250_params:
-                raise ValueError(f"Missing required key '{key}' in sts3250 parameters.")
+        for actuator_type, params in feetech_params_dict.items():
+            for key in required_keys:
+                if key not in params:
+                    raise ValueError(f"Missing required key '{key}' in {actuator_type} parameters.")
 
         # Apply servo-specific parameters based on joint metadata
         for i in range(mj_model.njnt):
             joint_name = mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_JOINT, i)
             if joint_name is None:
-                print(f"WARNING: Joint at index {i} has no name; skipping parameter assignment.")
+                logger.warning("Joint at index %d has no name; skipping parameter assignment.", i)
                 continue
 
             # Look up joint metadata. Warn if actuator_type is missing.
             if joint_name not in metadata:
-                print(f"WARNING: Joint '{joint_name}' is missing; skipping parameter assignment.")
+                logger.warning("Joint '%s' is missing; skipping parameter assignment.", joint_name)
                 continue
 
             joint_meta = metadata[joint_name]
-            actuator_type = joint_meta.actuator_type
-            if actuator_type is None:
-                print(f"WARNING: Joint '{joint_name}' is missing an actuator_type; skipping parameter assignment.")
+            if joint_meta.actuator_type is None:
+                logger.warning("Joint '%s' is missing an actuator_type; skipping parameter assignment.", joint_name)
                 continue
 
             dof_id = mj_model.jnt_dofadr[i]
 
             # Apply parameters based on the joint suffix
-            if "feetech-sts3215" in actuator_type:  # STS3215 servos (arms)
-                self._configure_actuator_params(mj_model, dof_id, joint_name, sts3215_params)
-            elif "feetech-sts3250" in actuator_type:  # STS3250 servos (legs)
-                self._configure_actuator_params(mj_model, dof_id, joint_name, sts3250_params)
+            self._configure_actuator_params(mj_model, dof_id, joint_name, feetech_params_dict[joint_meta.actuator_type])
+
+            #     self._configure_actuator_params(mj_model, dof_id, joint_name, sts3215_params)
+            # elif "feetech-sts3250" in joint_meta.actuator_type:  # STS3250 servos (legs)
+            #     self._configure_actuator_params(mj_model, dof_id, joint_name, sts3250_params)
 
         return mj_model
 
@@ -366,10 +363,13 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
             params_3215: FeetechParams = json.load(f)
         with open(params_file_3250, "r") as f:
             params_3250: FeetechParams = json.load(f)
-        return {
-            "sts3215": params_3215,
-            "sts3250": params_3250,
+
+        return_dict = {
+            "feetech-sts3215-12v": params_3215,
+            "feetech-sts3250": params_3250,
         }
+        logger.info("Loaded Feetech parameters: %s", return_dict)
+        return return_dict
 
     def get_actuators(
         self,
@@ -394,40 +394,29 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
         error_gain_j = jnp.zeros(num_joints)
         # Load Feetech parameters
         feetech_params_dict = self._load_feetech_params()
-        sts3215_params = feetech_params_dict["sts3215"]
-        sts3250_params = feetech_params_dict["sts3250"]
 
         # Validate parameters
         required_keys = ["max_torque", "error_gain", "max_velocity", "max_pwm", "vin", "kt", "R"]
-        for key in required_keys:
-            if key not in sts3215_params:
-                raise ValueError(f"Missing required key '{key}' in sts3215 parameters.")
-            if key not in sts3250_params:
-                raise ValueError(f"Missing required key '{key}' in sts3250 parameters.")
+        for actuator_type, params in feetech_params_dict.items():
+            for key in required_keys:
+                if key not in params:
+                    raise ValueError(f"Missing required key '{key}' in {actuator_type} parameters.")
 
         # Sort joint_mappings by actuator_id to ensure correct ordering
         sorted_joints = sorted(self.joint_mappings.items(), key=lambda x: x[1]["actuator_id"])
 
         for i, (joint_name, mapping) in enumerate(sorted_joints):
-            joint_meta = metadata[joint_name]
-            if not isinstance(joint_meta, JointMetadataOutput):
+            joint_metadata = metadata[joint_name]
+            if not isinstance(joint_metadata, JointMetadataOutput):
                 raise TypeError(f"Metadata entry for joint '{joint_name}' must be a JointMetadataOutput.")
 
-            actuator_type = joint_meta.actuator_type
+            actuator_type = cast(str, joint_metadata.actuator_type)
             if actuator_type is None:
                 raise ValueError(f"'actuator_type' is not available for joint {joint_name}")
             if not isinstance(actuator_type, str):
                 raise TypeError(f"'actuator_type' for joint {joint_name} must be a string.")
 
-            # Set parameters based on actuator type
-            if "feetech-sts3215" in actuator_type:
-                params = sts3215_params
-            elif "feetech-sts3250" in actuator_type:
-                params = sts3250_params
-            else:
-                raise ValueError(f"Unknown or unsupported actuator type '{actuator_type}' for joint {joint_name}")
-
-            # Set all parameters for this joint
+            params = feetech_params_dict[actuator_type]
             max_torque_j = max_torque_j.at[i].set(params["max_torque"])
             max_velocity_j = max_velocity_j.at[i].set(params["max_velocity"])
             max_pwm_j = max_pwm_j.at[i].set(params["max_pwm"])
@@ -437,13 +426,10 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
             error_gain_j = error_gain_j.at[i].set(params["error_gain"])
 
             # Set kp and kd values
-            if joint_meta.kp is None or joint_meta.kd is None:
+            if joint_metadata.kp is None or joint_metadata.kd is None:
                 raise ValueError(f"kp/kd values for joint {joint_name} are not available")
-            try:
-                kp_j = kp_j.at[i].set(float(joint_meta.kp))
-                kd_j = kd_j.at[i].set(float(joint_meta.kd))
-            except (KeyError, ValueError, TypeError) as e:
-                raise ValueError(f"Invalid kp/kd values for joint {joint_name}: {e}")
+            kp_j = kp_j.at[i].set(float(joint_metadata.kp))
+            kd_j = kd_j.at[i].set(float(joint_metadata.kd))
 
         self.log_joint_config(physics_model)
 
