@@ -16,6 +16,14 @@ ASSETS_DIR = Path(__file__).parent / "assets/actuators/feetech"
 # Parameter filenames to test
 PARAMS_FILES = ["sts3250_params.json", "sts3215_12v_params.json"]
 
+# --- Module-level check for parameter files --- 
+# Construct full paths and fail early if any are missing
+for filename in PARAMS_FILES:
+    params_path = ASSETS_DIR / filename
+    if not params_path.is_file():
+        raise FileNotFoundError(f"Required actuator params file not found during test setup: {params_path}")
+
+
 NUM_ACTUATORS = 1
 
 
@@ -47,13 +55,21 @@ def mock_physics_data():
     return MockPhysicsData()
 
 @pytest.mark.parametrize("real_feetech_params", PARAMS_FILES, indirect=True)
-def test_actuator_basic_functionality(real_feetech_params, mock_physics_data):
+@pytest.mark.parametrize("jit_enabled", [True, False])
+def test_actuator_basic_functionality(real_feetech_params, mock_physics_data, jit_enabled):
+    """Test basic actuator functionality with both JIT enabled and disabled."""
+    # Configure JIT based on parameter
+    if not jit_enabled:
+        jax.config.update('jax_disable_jit', True)
+    else:
+        jax.config.update('jax_disable_jit', False)
+
     num_actuators = NUM_ACTUATORS
     assert num_actuators == len(mock_physics_data.qpos) - 7  # Subtract 7 base positions
     assert num_actuators == len(mock_physics_data.qvel) - 6  # Subtract 6 base velocities
 
     params = real_feetech_params 
-    print(f"--- Testing with parameters from: {params['_filename']} ---")
+    print(f"--- Testing with parameters from: {params['_filename']} (JIT {'enabled' if jit_enabled else 'disabled'}) ---")
 
     # kp and kd are not directly in the params file, using placeholder values for now
     # In a real scenario, these would likely come from metadata or config
@@ -82,12 +98,14 @@ def test_actuator_basic_functionality(real_feetech_params, mock_physics_data):
     )
     
     action_j = jnp.ones(num_actuators)
-    # action_j = jnp.zeros(num_actuators)
-    print(f"Input action_j: {action_j}") # Optional: print action if needed
+    print(f"Input action_j: {action_j}")
 
     rng = jax.random.PRNGKey(0)
     torque_j = actuators.get_ctrl(action_j, mock_physics_data, rng)
     print(f"Generated torque_j: {torque_j}")
 
     assert torque_j.shape == (num_actuators,)
-    assert isinstance(torque_j, jnp.ndarray) 
+    assert isinstance(torque_j, jnp.ndarray)
+
+    # Reset JIT configuration after test
+    jax.config.update('jax_disable_jit', False) 
