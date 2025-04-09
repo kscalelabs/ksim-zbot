@@ -22,7 +22,15 @@ import tensorflow as tf
 logger = logging.getLogger(__name__)
 
 # Store IMU values for plotting
-imu_values = {"accel_x": [], "accel_y": [], "accel_z": [], "gyro_x": [], "gyro_y": [], "gyro_z": [], "steps": []}
+imu_values: dict[str, list[float]] = {
+    "accel_x": [],
+    "accel_y": [],
+    "accel_z": [],
+    "gyro_x": [],
+    "gyro_y": [],
+    "gyro_z": [],
+    "steps": [],
+}
 step_counter = 0
 ip = None  # Global IP variable
 
@@ -74,7 +82,9 @@ def load_actuator_mapping(metadata_path: str | Path) -> dict:
 
     # Log the mapping for verification
     logger.info("Actuator mapping (MuJoCo order):")
-    for actuator_id, mapping in sorted(actuator_mapping.items(), key=lambda x: x[1]["nn_id"]):
+    for actuator_id, mapping in sorted(
+        actuator_mapping.items(), key=lambda x: int(x[1]["nn_id"]) if x[1]["nn_id"] is not None else float("inf")
+    ):
         logger.info("Joint: %-20s nn_id: %2d actuator_id: %2d", mapping["joint_name"], mapping["nn_id"], actuator_id)
 
     return actuator_mapping
@@ -134,9 +144,16 @@ async def get_observation(
 
 async def send_actions(kos: pykos.KOS, position: np.ndarray, actuator_mapping: dict) -> None:
     """Send actions using actuator mapping from metadata."""
+    # Convert position to degrees and create actuator commands
     position = np.rad2deg(position)
     nn_id_to_actuator_id = list(actuator_mapping.items())
-    actuator_commands = [(actuator_id, mapping["actuator_id"]) for actuator_id, mapping in nn_id_to_actuator_id]
+    actuator_commands: list[pykos.services.actuator.ActuatorCommand] = [
+        {
+            "actuator_id": actuator_id,
+            "position": position[mapping["nn_id"]],
+        }
+        for actuator_id, mapping in nn_id_to_actuator_id
+    ]
     logger.info(" actuator commands: %s", actuator_commands)
     await kos.actuator.command_actuators(actuator_commands)
 

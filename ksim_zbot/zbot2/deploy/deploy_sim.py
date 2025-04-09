@@ -68,7 +68,9 @@ def load_actuator_mapping(metadata_path: str | Path) -> dict:
 
     # Log the mapping for verification
     logger.info("Actuator mapping (MuJoCo order):")
-    for actuator_id, mapping in sorted(actuator_mapping.items(), key=lambda x: x[1]["nn_id"]):
+    for actuator_id, mapping in sorted(
+        actuator_mapping.items(), key=lambda x: int(x[1]["nn_id"]) if x[1]["nn_id"] is not None else float("inf")
+    ):
         logger.info("Joint: %-20s nn_id: %2d actuator_id: %2d", mapping["joint_name"], mapping["nn_id"], actuator_id)
 
     return actuator_mapping
@@ -300,6 +302,11 @@ async def main(
             observation = observation.reshape(1, -1)
             # Model only outputs position commands
             action = np.array(model.infer(observation)).reshape(-1)
+
+            # action = np.zeros_like(action)
+            # action[9] = -0.5
+            # action[15] = 0.5
+
             observation, _ = await asyncio.gather(
                 get_observation(kos, actuator_mapping, prev_action),
                 send_actions(kos, action, actuator_mapping),

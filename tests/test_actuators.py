@@ -29,14 +29,6 @@ for filename in PARAMS_FILES:
 NUM_ACTUATORS = 1
 
 
-class MockPhysicsData:
-    """Mock class for physics data used in testing."""
-
-    def __init__(self) -> None:
-        self.qpos = jnp.zeros(NUM_ACTUATORS + 7)
-        self.qvel = jnp.zeros(NUM_ACTUATORS + 6)
-
-
 @pytest.fixture
 def real_feetech_params(request: pytest.FixtureRequest) -> dict:
     """Load Feetech parameters from the specified JSON file."""
@@ -55,6 +47,14 @@ def real_feetech_params(request: pytest.FixtureRequest) -> dict:
 
     params["_filename"] = filename
     return params
+
+
+class MockPhysicsData:
+    """Mock class for physics data used in testing."""
+
+    def __init__(self) -> None:
+        self.qpos = jnp.zeros(NUM_ACTUATORS + 7)
+        self.qvel = jnp.zeros(NUM_ACTUATORS + 6)
 
 
 @pytest.fixture
