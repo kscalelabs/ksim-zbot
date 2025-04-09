@@ -97,7 +97,7 @@ def test_actuator_basic_functionality(
     vin_j = jnp.array([params["vin"]] * num_actuators)
     kt_j = jnp.array([params["kt"]] * num_actuators)
     r_j = jnp.array([params["R"]] * num_actuators)
-    error_gain_data_j = [params["error_gain_data"]] * num_actuators
+    error_gain_j = jnp.array([params["error_gain"]] * num_actuators)
 
     actuators = FeetechActuators(
         max_torque_j=max_torque_j,
@@ -109,7 +109,7 @@ def test_actuator_basic_functionality(
         kt_j=kt_j,
         r_j=r_j,
         dt=0.001,
-        error_gain_data_j=error_gain_data_j,
+        error_gain_j=error_gain_j,
     )
 
     action_j = jnp.ones(num_actuators)
