@@ -114,7 +114,6 @@ class FeetechActuators(Actuators):
         self.r_j = r_j
         self.dt = dt
         self.prev_qtarget_j = jnp.zeros_like(self.kp_j)
-
         self.action_noise = action_noise
         self.action_noise_type = action_noise_type
         self.torque_noise = torque_noise
@@ -460,9 +459,10 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
         metadata: dict[str, dict] | None = None,
     ) -> ksim.Actuators:
         if metadata is not None:
-            joint_names = sorted(metadata.keys())
+            self.joint_mappings = self.create_joint_mappings(physics_model, metadata)
 
-            num_joints = len(joint_names)
+            num_joints = len(self.joint_mappings)
+
             max_torque_j = jnp.zeros(num_joints)
             max_velocity_j = jnp.zeros(num_joints)
             max_pwm_j = jnp.zeros(num_joints)
@@ -472,9 +472,12 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
             kp_j = jnp.zeros(num_joints)
             kd_j = jnp.zeros(num_joints)
 
+            # Load Feetech parameters
             feetech_params_dict = self._load_feetech_params()
             sts3215_params = feetech_params_dict["sts3215"]
             sts3250_params = feetech_params_dict["sts3250"]
+
+            # Validate parameters
             required_keys = ["max_torque", "error_gain_data", "max_velocity", "max_pwm", "vin", "kt", "R"]
             for key in required_keys:
                 if key not in sts3215_params:
@@ -490,70 +493,62 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
             # Build a list of error_gain_data (one entry per joint)
             error_gain_data_list_j: list[ErrorGainData] = []
 
-            for i, joint_name in enumerate(joint_names):
+             # Sort joint_mappings by actuator_id to ensure correct ordering
+            sorted_joints = sorted(self.joint_mappings.items(), key=lambda x: x[1]["actuator_id"])
+
+            for i, (joint_name, mapping) in enumerate(sorted_joints):
                 joint_meta = metadata[joint_name]
                 if not isinstance(joint_meta, dict):
                     raise TypeError(f"Metadata entry for joint '{joint_name}' must be a dictionary.")
-                if "actuator_type" not in joint_meta:
+                
+                actuator_type = joint_meta.get("actuator_type")
+                if actuator_type is None:
                     raise ValueError(f"'actuator_type' is not available for joint {joint_name}")
-
-                actuator_type = joint_meta["actuator_type"]
                 if not isinstance(actuator_type, str):
                     raise TypeError(f"'actuator_type' for joint {joint_name} must be a string.")
 
+                # Set parameters based on actuator type
                 if "feetech-sts3215" in actuator_type:
-                    max_torque_j = max_torque_j.at[i].set(sts3215_params["max_torque"])
-                    max_velocity_j = max_velocity_j.at[i].set(sts3215_params["max_velocity"])
-                    max_pwm_j = max_pwm_j.at[i].set(sts3215_params["max_pwm"])
-                    vin_j = vin_j.at[i].set(sts3215_params["vin"])
-                    kt_j = kt_j.at[i].set(sts3215_params["kt"])
-                    r_j = r_j.at[i].set(sts3215_params["R"])
-                    error_gain_data_list_j.append(sts3215_params["error_gain_data"])
+                    params = sts3215_params
                 elif "feetech-sts3250" in actuator_type:
-                    max_torque_j = max_torque_j.at[i].set(sts3250_params["max_torque"])
-                    max_velocity_j = max_velocity_j.at[i].set(sts3250_params["max_velocity"])
-                    max_pwm_j = max_pwm_j.at[i].set(sts3250_params["max_pwm"])
-                    vin_j = vin_j.at[i].set(sts3250_params["vin"])
-                    kt_j = kt_j.at[i].set(sts3250_params["kt"])
-                    r_j = r_j.at[i].set(sts3250_params["R"])
-                    error_gain_data_list_j.append(sts3250_params["error_gain_data"])
+                    params = sts3250_params
                 else:
                     raise ValueError(f"Unknown or unsupported actuator type '{actuator_type}' for joint {joint_name}")
 
-                if "kp" not in joint_meta:
-                    raise ValueError(f"'kp' is not available for joint {joint_name}")
-                if "kd" not in joint_meta:
-                    raise ValueError(f"'kd' is not available for joint {joint_name}")
+                # Set all parameters for this joint
+                max_torque_j = max_torque_j.at[i].set(params["max_torque"])
+                max_velocity_j = max_velocity_j.at[i].set(params["max_velocity"])
+                max_pwm_j = max_pwm_j.at[i].set(params["max_pwm"])
+                vin_j = vin_j.at[i].set(params["vin"])
+                kt_j = kt_j.at[i].set(params["kt"])
+                r_j = r_j.at[i].set(params["R"])
+                error_gain_data_list_j.append(params["error_gain_data"])
 
+                # Set kp and kd values
                 try:
-                    kp_val = float(joint_meta["kp"])
-                    kd_val = float(joint_meta["kd"])
-                except (ValueError, TypeError) as e:
-                    raise ValueError(f"Could not convert kp/kd gains to a float for joint {joint_name}: {e}")
-
-                kp_j = kp_j.at[i].set(kp_val)
-                kd_j = kd_j.at[i].set(kd_val)
+                    kp_j = kp_j.at[i].set(float(joint_meta["kp"]))
+                    kd_j = kd_j.at[i].set(float(joint_meta["kd"]))
+                except (KeyError, ValueError, TypeError) as e:
+                    raise ValueError(f"Invalid kp/kd values for joint {joint_name}: {e}")
 
             self.log_joint_config(physics_model)
 
-        else:
-            raise ValueError("Metadata is not available")
-        return FeetechActuators(
-            max_torque_j=max_torque_j,
-            max_velocity_j=max_velocity_j,
-            max_pwm_j=max_pwm_j,
-            vin_j=vin_j,
-            kt_j=kt_j,
-            r_j=r_j,
-            kp_j=kp_j,
-            kd_j=kd_j,
-            dt=self.config.dt,
-            error_gain_data_j=error_gain_data_list_j,
-            action_noise=0.0,
-            action_noise_type="none",
-            torque_noise=0.0,
-            torque_noise_type="none",
-        )
+            return FeetechActuators(
+                max_torque_j=max_torque_j,
+                max_velocity_j=max_velocity_j,
+                max_pwm_j=max_pwm_j,
+                vin_j=vin_j,
+                kt_j=kt_j,
+                r_j=r_j,
+                kp_j=kp_j,
+                kd_j=kd_j,
+                dt=self.config.dt,
+                error_gain_data_j=error_gain_data_list_j,
+                action_noise=0.0,
+                action_noise_type="none",
+                torque_noise=0.0,
+                torque_noise_type="none",
+            )
 
     def make_export_model(self, model: ZbotModel, stochastic: bool = False, batched: bool = False) -> Callable:
         """Makes a callable inference function that directly takes a flattened input vector and returns an action.
@@ -604,3 +599,58 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
         )
 
         return state
+
+
+    def create_joint_mappings(self, physics_model: ksim.PhysicsModel, metadata: dict[str, dict]) -> dict[str, dict]:
+        """Creates mappings between joint names, nn_ids, and actuator_ids.
+        
+        Args:
+            physics_model: The MuJoCo/MJX model containing joint information
+            metadata: The joint metadata dictionary from metadata.json
+        
+        Returns:
+            Dictionary mapping joint names to their nn_id and actuator_id
+        """
+        debug_lines = ["==== Joint Name to ID Mappings ===="]
+        
+        # Get ordered list of joints from MuJoCo/MJX model
+        if isinstance(physics_model, mujoco.MjModel):
+            mujoco_joints = [
+                mujoco.mj_id2name(physics_model, mujoco.mjtObj.mjOBJ_JOINT, i)
+                for i in range(physics_model.njnt)
+                if mujoco.mj_id2name(physics_model, mujoco.mjtObj.mjOBJ_JOINT, i) is not None
+            ]
+        else:  # MJX model
+            def extract_joint_name(model: mjx.Model, idx: int) -> Optional[str]:
+                adr = model.name_jntadr[idx]
+                if adr < 0:
+                    return None
+                end = model.names.find(b"\x00", adr)
+                return model.names[adr:end].decode("utf-8")
+            
+            mujoco_joints = [
+                name for i in range(physics_model.njnt)
+                if (name := extract_joint_name(physics_model, i)) is not None
+            ]
+
+        # Create mappings using joint names as keys
+        joint_mappings = {}
+        
+        # Map each joint, using MuJoCo order for nn_ids
+        for nn_id, joint_name in enumerate(mujoco_joints):
+            if joint_name in metadata:
+                actuator_id = int(metadata[joint_name]["id"])
+                joint_mappings[joint_name] = {
+                    "nn_id": nn_id,
+                    "actuator_id": actuator_id
+                }
+                
+                debug_lines.append(
+                    f"{joint_name:<30} -> nn_id: {nn_id:2d}, "
+                    f"actuator_id: {actuator_id:2d}"
+                )
+            else:
+                logger.warning(f"Joint {joint_name} not found in metadata")
+        
+        logger.info("\n".join(debug_lines))
+        return joint_mappings
