@@ -221,10 +221,6 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
             # Apply parameters based on the joint suffix
             self._configure_actuator_params(mj_model, dof_id, joint_name, feetech_params_dict[joint_meta.actuator_type])
 
-            #     self._configure_actuator_params(mj_model, dof_id, joint_name, sts3215_params)
-            # elif "feetech-sts3250" in joint_meta.actuator_type:  # STS3250 servos (legs)
-            #     self._configure_actuator_params(mj_model, dof_id, joint_name, sts3250_params)
-
         return mj_model
 
     def log_joint_config(self, model: Union[mujoco.MjModel, mjx.Model]) -> None:
