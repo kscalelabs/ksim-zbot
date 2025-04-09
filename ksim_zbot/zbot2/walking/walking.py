@@ -42,8 +42,8 @@ OBS_SIZE = 20 + 20 + 3 + 3 + 20  # = 66
 CMD_SIZE = 2
 NUM_INPUTS = OBS_SIZE + CMD_SIZE
 # Final Input Size:
-NUM_INPUTS = OBS_SIZE + CMD_SIZE + (SINGLE_STEP_HISTORY_SIZE * HISTORY_LENGTH)
-# NUM_INPUTS = 66 + 2 + (0 * 0) = 68
+NUM_INPUTS = OBS_SIZE + CMD_SIZE
+# NUM_INPUTS = 66 + 2 = 68
 NUM_OUTPUTS = 20
 
 
@@ -290,10 +290,9 @@ class ZbotActor(eqx.Module):
         imu_gyro_3: Array,
         lin_vel_cmd_2: Array,
         last_action_n: Array,
-        history_n: Array,
     ) -> distrax.Normal:
         x_n = jnp.concatenate(
-            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], axis=-1
+            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n], axis=-1
         )  # (NUM_INPUTS)
 
         return self.call_flat_obs(x_n)
@@ -340,10 +339,9 @@ class ZbotCritic(eqx.Module):
         imu_gyro_3: Array,
         lin_vel_cmd_2: Array,
         last_action_n: Array,
-        history_n: Array,
     ) -> Array:
         x_n = jnp.concatenate(
-            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], axis=-1
+            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n], axis=-1
         )  # (NUM_INPUTS)
         return self.call_flat_obs(x_n)
 
@@ -440,7 +438,6 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
             ksim.SensorObservation.create(physics_model=physics_model, sensor_name="base_link_vel", noise=0.1),
             ksim.SensorObservation.create(physics_model=physics_model, sensor_name="base_link_ang_vel", noise=0.1),
             LastActionObservation(noise=0.0),
-            HistoryObservation(),
         ]
 
     def get_curriculum(self, physics_model: ksim.PhysicsModel) -> Curriculum:
@@ -468,9 +465,14 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         return [
             HipDeviationPenalty.create(
                 physics_model=physics_model,
-                hip_names=("right_hip_roll", "left_hip_roll"),
-                joint_targets=(-0.20, 0.20),
-                scale=-1.0,
+                hip_names=(
+                    "right_hip_roll",
+                    "left_hip_roll",
+                    "right_hip_yaw",
+                    "left_hip_yaw",
+                ),
+                joint_targets=(-0.5, 0.5, 0.0, 0.0),
+                scale=-5.0,
             ),
             JointDeviationPenalty(scale=-1.0),
             DHControlPenalty(scale=-0.05),
@@ -502,7 +504,7 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         return ZbotModel(key)
 
     def get_initial_carry(self, rng: PRNGKeyArray) -> Array:
-        return jnp.zeros(HISTORY_LENGTH * SINGLE_STEP_HISTORY_SIZE)
+        return jnp.zeros(0)
 
     def _run_actor(
         self,
@@ -516,12 +518,9 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         imu_gyro_3 = observations["sensor_observation_imu_gyro"]
         lin_vel_cmd_2 = commands["linear_velocity_step_command"]
         last_action_n = observations["last_action_observation"]
-        history_n = observations["history_observation"]
 
         # Concatenate inputs like the humanoid example
-        x_n = jnp.concatenate(
-            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], axis=-1
-        )
+        x_n = jnp.concatenate([joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n], axis=-1)
 
         # Call the actor with a flat observation tensor
         return model.actor.call_flat_obs(x_n)
@@ -538,12 +537,9 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         imu_gyro_3 = observations["sensor_observation_imu_gyro"]
         lin_vel_cmd_2 = commands["linear_velocity_step_command"]
         last_action_n = observations["last_action_observation"]
-        history_n = observations["history_observation"]
 
         # Concatenate inputs
-        x_n = jnp.concatenate(
-            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], axis=-1
-        )
+        x_n = jnp.concatenate([joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n], axis=-1)
 
         # Call critic with flat observation tensor
         return model.critic.call_flat_obs(x_n)
@@ -563,11 +559,10 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         imu_gyro_3 = trajectories.obs["sensor_observation_imu_gyro"]  # (..., 3)
         lin_vel_cmd_2 = trajectories.command["linear_velocity_step_command"]  # (..., 2)
         last_action_n = trajectories.obs["last_action_observation"]  # (..., N)
-        history_n = trajectories.obs["history_observation"]  # (..., 0)
 
         # Concatenate inputs to create a single tensor for each batch item
         flat_obs = jnp.concatenate(
-            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n, history_n], axis=-1
+            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n], axis=-1
         )
 
         # Call actor and critic directly with batched inputs
@@ -592,36 +587,7 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         action_dist_n = self._run_actor(model, observations, commands)
         action_n = action_dist_n.sample(seed=rng) * self.config.action_scale
 
-        if HISTORY_LENGTH > 0:
-            joint_pos_n = observations["dhjoint_position_observation"]
-            joint_vel_n = observations["dhjoint_velocity_observation"]
-            imu_acc_3 = observations["sensor_observation_imu_acc"]
-            imu_gyro_3 = observations["sensor_observation_imu_gyro"]
-            lin_vel_cmd_2 = commands["linear_velocity_step_command"]
-            last_action_n = observations["last_action_observation"]
-
-            history_n = jnp.concatenate(
-                [
-                    joint_pos_n,
-                    joint_vel_n,
-                    imu_acc_3,
-                    imu_gyro_3,
-                    lin_vel_cmd_2,
-                    last_action_n,
-                    action_n,
-                ],
-                axis=-1,
-            )
-
-            # Roll the history by shifting the existing history and adding the new data
-            carry_reshaped = carry.reshape(HISTORY_LENGTH, SINGLE_STEP_HISTORY_SIZE)
-            shifted_history = jnp.roll(carry_reshaped, shift=-1, axis=0)
-            new_history = shifted_history.at[HISTORY_LENGTH - 1].set(history_n)
-            history_n = new_history.reshape(-1)
-        else:
-            history_n = jnp.zeros(0)
-
-        return ksim.Action(action=action_n, carry=history_n, aux_outputs=None)
+        return ksim.Action(action=action_n, carry=jnp.zeros(0), aux_outputs=None)
 
 
 if __name__ == "__main__":
