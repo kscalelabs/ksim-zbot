@@ -1,23 +1,36 @@
-"""Example script to deploy a SavedModel on K-Bot."""
+"""Example script to deploy a SavedModel in KOS-Sim."""
 
 import argparse
 import asyncio
 import json
 import logging
+import signal
+import subprocess
+import sys
 import time
+import types
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import pykos
 import tensorflow as tf
+import xml.etree.ElementTree as ET
+import matplotlib.pyplot as plt
 
 logger = logging.getLogger(__name__)
 
-DT = 0.02  # Policy time step (50Hz)
-GRAVITY = 9.81  # m/s
-ACTION_SCALE = 1.0
+# Store IMU values for plotting
+imu_values = {
+    'accel_x': [], 'accel_y': [], 'accel_z': [],
+    'gyro_x': [], 'gyro_y': [], 'gyro_z': [],
+    'steps': []
+}
+step_counter = 0
+ip = None  # Global IP variable
 
+DT = 0.02  # Policy time step (50Hz)
 
 @dataclass
 class Actuator:
@@ -28,35 +41,115 @@ class Actuator:
     max_torque: float
     joint_name: str
 
+def load_actuator_mapping(metadata_path: str | Path) -> dict:
+    """Load actuator mapping using MuJoCo model joint order but return actuator_id keyed mapping."""
+    metadata_path = Path(metadata_path)
+    mjcf_path = metadata_path.parent / "robot.mjcf"
+    
+    # Load metadata
+    with open(metadata_path, "r") as f:
+        metadata = json.load(f)
+    joint_metadata = metadata.get("joint_name_to_metadata", {})
 
-ACTUATOR_LIST: list[Actuator] = [
-    # Right arm (nn_id 0-4)
-    Actuator(actuator_id=21, nn_id=0, kp=40.0, kd=4.0, max_torque=40.0, joint_name="dof_right_shoulder_pitch_03"),
-    Actuator(actuator_id=22, nn_id=1, kp=40.0, kd=4.0, max_torque=40.0, joint_name="dof_right_shoulder_roll_03"),
-    Actuator(actuator_id=23, nn_id=2, kp=30.0, kd=1.0, max_torque=20.0, joint_name="dof_right_shoulder_yaw_02"),
-    Actuator(actuator_id=24, nn_id=3, kp=30.0, kd=1.0, max_torque=20.0, joint_name="dof_right_elbow_02"),
-    Actuator(
-        actuator_id=25, nn_id=4, kp=20.0, kd=0.45473329537059787, max_torque=20.0, joint_name="dof_right_wrist_00"
-    ),
-    # Left arm (nn_id 5-9)
-    Actuator(actuator_id=11, nn_id=5, kp=40.0, kd=4.0, max_torque=40.0, joint_name="dof_left_shoulder_pitch_03"),
-    Actuator(actuator_id=12, nn_id=6, kp=40.0, kd=4.0, max_torque=40.0, joint_name="dof_left_shoulder_roll_03"),
-    Actuator(actuator_id=13, nn_id=7, kp=30.0, kd=1.0, max_torque=20.0, joint_name="dof_left_shoulder_yaw_02"),
-    Actuator(actuator_id=14, nn_id=8, kp=30.0, kd=1.0, max_torque=20.0, joint_name="dof_left_elbow_02"),
-    Actuator(actuator_id=15, nn_id=9, kp=20.0, kd=0.45473329537059787, max_torque=20.0, joint_name="dof_left_wrist_00"),
-    # Right leg (nn_id 10-14)
-    Actuator(actuator_id=41, nn_id=10, kp=85.0, kd=5.0, max_torque=80.0, joint_name="dof_right_hip_pitch_04"),
-    Actuator(actuator_id=42, nn_id=11, kp=40.0, kd=4.0, max_torque=40.0, joint_name="dof_right_hip_roll_03"),
-    Actuator(actuator_id=43, nn_id=12, kp=40.0, kd=4.0, max_torque=40.0, joint_name="dof_right_hip_yaw_03"),
-    Actuator(actuator_id=44, nn_id=13, kp=85.0, kd=5.0, max_torque=80.0, joint_name="dof_right_knee_04"),
-    Actuator(actuator_id=45, nn_id=14, kp=30.0, kd=1.0, max_torque=15.0, joint_name="dof_right_ankle_02"),
-    # Left leg (nn_id 15-19)
-    Actuator(actuator_id=31, nn_id=15, kp=85.0, kd=5.0, max_torque=80.0, joint_name="dof_left_hip_pitch_04"),
-    Actuator(actuator_id=32, nn_id=16, kp=40.0, kd=4.0, max_torque=40.0, joint_name="dof_left_hip_roll_03"),
-    Actuator(actuator_id=33, nn_id=17, kp=40.0, kd=4.0, max_torque=40.0, joint_name="dof_left_hip_yaw_03"),
-    Actuator(actuator_id=34, nn_id=18, kp=85.0, kd=5.0, max_torque=80.0, joint_name="dof_left_knee_04"),
-    Actuator(actuator_id=35, nn_id=19, kp=30.0, kd=1.0, max_torque=15.0, joint_name="dof_left_ankle_02"),
-]
+    # Parse MJCF to get joint order
+    tree = ET.parse(mjcf_path)
+    root = tree.getroot()
+
+    # Get ordered list of joints from MuJoCo model, excluding floating base
+    mujoco_joints = []
+    for joint in root.findall(".//joint"):
+        joint_name = joint.get("name")
+        if joint_name != "floating_base":
+            mujoco_joints.append(joint_name)
+
+    # Create mapping with actuator_id as key, maintaining MuJoCo order for nn_ids
+    actuator_mapping = {}
+    for nn_id, joint_name in enumerate(mujoco_joints):
+        if joint_name in joint_metadata:
+            actuator_id = int(joint_metadata[joint_name]["id"])
+            actuator_mapping[actuator_id] = {
+                "joint_name": joint_name,
+                "nn_id": nn_id - 1  # MuJoCo uses 0-based indexing
+            }
+        else:
+            logger.warning(f"Joint {joint_name} not found in metadata")
+
+    # Log the mapping for verification
+    logger.info("Actuator mapping (MuJoCo order):")
+    for actuator_id, mapping in sorted(actuator_mapping.items(), key=lambda x: x[1]["nn_id"]):
+        logger.info(f"Joint: {mapping['joint_name']:20} nn_id: {mapping['nn_id']:2d} actuator_id: {actuator_id:2d}")
+
+    return actuator_mapping
+
+
+async def get_observation(
+    kos: pykos.KOS, actuator_mapping: dict, prev_action: np.ndarray, cmd: np.ndarray = np.array([0.15, 0.0])
+) -> np.ndarray:
+    """Get observation using actuator mapping from metadata."""
+    global step_counter
+    actuator_ids = list(actuator_mapping.keys())
+
+    (actuator_states, imu) = await asyncio.gather(
+        kos.actuator.get_actuators_state(actuator_ids),
+        kos.imu.get_imu_values(),
+    )
+    
+        # Convert gyro values from degrees to radians
+    global ip
+    if ip == "192.168.42.1":
+        imu.gyro_x = np.deg2rad(imu.gyro_x)
+        imu.gyro_y = np.deg2rad(imu.gyro_y)
+        imu.gyro_z = np.deg2rad(imu.gyro_z)
+        
+    gravity_bias = 9.81
+    
+    imu.accel_z = imu.accel_z + gravity_bias
+
+    # Store IMU values for plotting
+    imu_values['accel_x'].append(imu.accel_x)
+    imu_values['accel_y'].append(imu.accel_y)
+    imu_values['accel_z'].append(imu.accel_z)
+    imu_values['gyro_x'].append(imu.gyro_x)
+    imu_values['gyro_y'].append(imu.gyro_y)
+    imu_values['gyro_z'].append(imu.gyro_z)
+    imu_values['steps'].append(step_counter)
+    step_counter += 1
+
+    nn_id_to_actuator_id = list(actuator_mapping.items())
+
+    # Build position and velocity observations
+    state_dict_pos = {state.actuator_id: state.position for state in actuator_states.states}
+    state_dict_vel = {state.actuator_id: state.velocity for state in actuator_states.states}
+
+    pos_obs = np.deg2rad([state_dict_pos[act_id] for act_id, _ in nn_id_to_actuator_id])
+    vel_obs = np.deg2rad([state_dict_vel[act_id] for act_id, _ in nn_id_to_actuator_id])
+
+
+
+    imu_obs = np.array([imu.accel_x, imu.accel_y, imu.accel_z, imu.gyro_x, imu.gyro_y, imu.gyro_z])
+    
+    print(f"imu accel x: {imu.accel_x}, imu accel y: {imu.accel_y}, imu accel z: {imu.accel_z}")
+    print(f"imu gyro x: {imu.gyro_x}, imu gyro y: {imu.gyro_y}, imu gyro z: {imu.gyro_z}")
+
+    last_action = prev_action  # Add last action to observation
+
+    observation = np.concatenate([pos_obs, vel_obs, imu_obs, cmd, last_action], axis=-1)
+    return observation
+
+
+async def send_actions(kos: pykos.KOS, position: np.ndarray, actuator_mapping: dict) -> None:
+    """Send actions using actuator mapping from metadata."""
+    position = np.rad2deg(position)
+    nn_id_to_actuator_id = list(actuator_mapping.items())
+    actuator_commands: list[pykos.services.actuator.ActuatorCommand] = [
+        {
+            "actuator_id": actuator_id,
+            "position": position[mapping["nn_id"]],
+        }
+        for actuator_id, mapping in nn_id_to_actuator_id
+    ]
+    logger.info(f" actuator commands: {actuator_commands}")
+    await kos.actuator.command_actuators(actuator_commands)
 
 
 def load_feetech_params(actuator_params_path: str) -> tuple[dict, dict]:
@@ -81,141 +174,189 @@ def load_feetech_params(actuator_params_path: str) -> tuple[dict, dict]:
     return params_3215, params_3250
 
 
-async def get_observation(kos: pykos.KOS) -> np.ndarray:
-    (actuator_states, imu) = await asyncio.gather(
-        kos.actuator.get_actuators_state([ac.actuator_id for ac in ACTUATOR_LIST]),
-        kos.imu.get_imu_values(),
-    )
-    state_dict_pos = {state.actuator_id: state.position for state in actuator_states.states}
-    pos_obs = np.deg2rad(
-        np.array([state_dict_pos[ac.actuator_id] for ac in sorted(ACTUATOR_LIST, key=lambda x: x.nn_id)])
-    )
-    state_dict_vel = {state.actuator_id: state.velocity for state in actuator_states.states}
-    vel_obs = np.deg2rad(
-        np.array([state_dict_vel[ac.actuator_id] for ac in sorted(ACTUATOR_LIST, key=lambda x: x.nn_id)])
-    )
-
-    accel = np.array([imu.accel_y, imu.accel_x, -imu.accel_z]) * GRAVITY
-
-    gyro = np.deg2rad(np.array([imu.gyro_y, imu.gyro_x, -imu.gyro_z]))
-
-    imu_obs = np.concatenate([accel, gyro], axis=-1)
-    logger.debug(imu_obs)
-    cmd = np.array([0.0, 0.0])
-    observation = np.concatenate([pos_obs, vel_obs, imu_obs, cmd], axis=-1)
-    return observation
-
-
-async def send_actions(kos: pykos.KOS, position: np.ndarray, velocity: np.ndarray) -> None:
-    position = np.rad2deg(position)
-    velocity = np.rad2deg(velocity)
-    actuator_commands: list[pykos.services.actuator.ActuatorCommand] = [
-        {
-            "actuator_id": ac.actuator_id,
-            "position": position[ac.nn_id] * ACTION_SCALE,
-            "velocity": velocity[ac.nn_id] * ACTION_SCALE,
-        }
-        for ac in ACTUATOR_LIST
-    ]
-    # logger.debug(actuator_commands)
-
-    await kos.actuator.command_actuators(actuator_commands)
-
-
-async def configure_actuators(kos: pykos.KOS, robot_urdf_path: str, actuator_params_path: str) -> None:
+async def configure_actuators(
+    kos: pykos.KOS, robot_urdf_path: str, actuator_params_path: str, metadata_path: str | None = None
+) -> None:
     """Configure actuators using parameters from files."""
     # Load the Feetech parameters
     sts3215_params, sts3250_params = load_feetech_params(actuator_params_path)
 
-    # Configure each actuator
-    for ac in ACTUATOR_LIST:
-        joint_name = ac.joint_name
+    if metadata_path:
+        metadata_file = Path(metadata_path)
+    else:
+        metadata_file = Path(robot_urdf_path) / "metadata.json"
 
-        # Determine parameter values based on joint type
-        if "_03" in joint_name:  # Assuming _03 corresponds to STS3215
+    if not metadata_file.exists():
+        raise FileNotFoundError(f"Metadata file not found at {metadata_file}")
+
+    with open(metadata_file, "r") as f:
+        metadata = json.load(f)
+
+    joint_metadata = metadata.get("joint_name_to_metadata", {})
+
+    # Configure each actuator from metadata
+    for joint_name, joint_info in joint_metadata.items():
+        try:
+            actuator_id = int(joint_info["id"])
+            actuator_type = joint_info.get("actuator_type", "")
+            kp = float(joint_info["kp"])
+            kd = float(joint_info["kd"])
+        except (KeyError, ValueError) as e:
+            logger.error("Invalid metadata for joint %s: %s for joint %s", joint_name, e, joint_info)
+            raise e
+
+        # Determine max_torque based on actuator type
+        if "feetech-sts3215" in actuator_type:
             max_torque = sts3215_params["max_torque"]
-        elif "_04" in joint_name:  # Assuming _04 corresponds to STS3250
+        elif "feetech-sts3250" in actuator_type:
             max_torque = sts3250_params["max_torque"]
-        elif "_02" in joint_name:  # Smaller actuators
-            max_torque = ac.max_torque
         else:
-            max_torque = ac.max_torque
-
-        # Use the predefined kp/kd values from ACTUATOR_LIST
-        kp = ac.kp
-        kd = ac.kd
+            logger.error("Unknown actuator type %s for joint %s", actuator_type, joint_name)
+            raise ValueError(f"Unknown actuator type {actuator_type} for joint {joint_name}")
+        
+        print(f"configure actuator_id: {actuator_id}, kp: {kp}, kd: {kd}, max_torque: {max_torque}")
 
         # Configure the actuator through KOS API
-        logger.info(
-            "Configuring actuator %d (%s): kp=%f, kd=%f, max_torque=%f", ac.actuator_id, joint_name, kp, kd, max_torque
-        )
         await kos.actuator.configure_actuator(
-            actuator_id=ac.actuator_id,
+            actuator_id=actuator_id,
             kp=kp,
             kd=kd,
             torque_enabled=True,
-            max_torque=max_torque,
+            # max_torque=max_torque,
+            acceleration=750
         )
 
 
-async def reset(kos: pykos.KOS) -> None:
-    zero_commands: list[pykos.services.actuator.ActuatorCommand] = [
-        {
-            "actuator_id": ac.actuator_id,
-            "position": 0.0,
-            "velocity": 0.0,
-        }
-        for ac in ACTUATOR_LIST
-    ]
-
-    await kos.actuator.command_actuators(zero_commands)
+async def reset(kos: pykos.KOS, actuator_mapping: dict) -> None:
+    """Reset the robot to a starting position."""
+    await kos.sim.reset(
+        pos={"x": 0.0, "y": 0.0, "z": 0.41},
+        quat={"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+        joints=[{"name": info["joint_name"], "pos": 0.0} for info in actuator_mapping.values()],
+    )
 
 
-async def disable(kos: pykos.KOS) -> None:
-    for ac in ACTUATOR_LIST:
-        await kos.actuator.configure_actuator(
-            actuator_id=ac.actuator_id,
-            torque_enabled=False,
-        )
+def spawn_kos_sim(no_render: bool) -> tuple[subprocess.Popen, Callable]:
+    """Spawn the KOS-Sim ZBot process and return the process object."""
+    logger.info("Starting KOS-Sim zbot-6dof-feet...")
+    args = ["kos-sim", "zbot-6dof-feet"]
+    if no_render:
+        args.append("--no-render")
+    process = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    logger.info("Waiting for KOS-Sim to start...")
+    time.sleep(5)
+
+    def cleanup(sig: int | None = None, frame: types.FrameType | None = None) -> None:
+        logger.info("Terminating KOS-Sim...")
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+        if sig:
+            sys.exit(0)
+
+    signal.signal(signal.SIGTERM, cleanup)
+
+    return process, cleanup
 
 
-async def main(model_path: str, ip: str, episode_length: int, robot_urdf_path: str, actuator_params_path: str) -> None:
+async def main(
+    model_path: str,
+    ip: str,
+    no_render: bool,
+    episode_length: int,
+    robot_urdf_path: str,
+    actuator_params_path: str,
+    metadata_path: str | None = None,
+) -> None:
     model = tf.saved_model.load(model_path)
-    kos = pykos.KOS(ip=ip)
-    await disable(kos)
-    time.sleep(1)
-    logger.info("Configuring actuators...")
-    await configure_actuators(kos, robot_urdf_path, actuator_params_path)
-    await asyncio.sleep(1)
-    logger.info("Resetting...")
-    await reset(kos)
+    sim_process = None
+    cleanup_fn = None
 
-    observation = (await get_observation(kos)).reshape(1, -1)
+    try:
+        # Try to connect to existing KOS-Sim
+        logger.info("Attempting to connect to existing KOS-Sim...")
+        kos = pykos.KOS(ip=ip)
+        # await kos.sim.get_parameters()
+        logger.info("Connected to existing KOS-Sim instance.")
+    except Exception as e:
+        raise e
+        logger.info("Could not connect to existing KOS-Sim: %s", e)
+        logger.info("Starting a new KOS-Sim instance locally...")
+        sim_process, cleanup_fn = spawn_kos_sim(no_render)
+        kos = pykos.KOS()
+        attempts = 0
+        while attempts < 5:
+            try:
+                await kos.sim.get_parameters()
+                logger.info("Connected to new KOS-Sim instance.")
+                break
+            except Exception as connect_error:
+                attempts += 1
+                logger.info("Failed to connect to KOS-Sim: %s", connect_error)
+                time.sleep(2)
+
+        if attempts == 5:
+            raise RuntimeError("Failed to connect to KOS-Sim")
+
+    # Determine metadata path
+    if metadata_path:
+        metadata_file = Path(metadata_path)
+    else:
+        metadata_file = Path(robot_urdf_path) / "metadata.json"
+
+    if not metadata_file.exists():
+        raise FileNotFoundError(f"Metadata file not found at {metadata_file}")
+
+    actuator_mapping = load_actuator_mapping(metadata_file)
+    # Configure actuators with metadata and parameter files
+    await configure_actuators(kos, robot_urdf_path, actuator_params_path, metadata_path)
+    # await reset(kos, actuator_mapping)
+
+    prev_action = np.zeros(len(actuator_mapping))
+
+    observation = (await get_observation(kos, actuator_mapping, prev_action)).reshape(1, -1)
+
+    if no_render:
+        await kos.process_manager.start_kclip("deployment")
 
     # warm up model
     model.infer(observation)
 
-    for i in range(5, -1, -1):
-        logger.info("Starting in %d seconds...", i)
-        await asyncio.sleep(1)
-
     target_time = time.time() + DT
-    observation = await get_observation(kos)
+    observation = await get_observation(kos, actuator_mapping, prev_action)
 
     end_time = time.time() + episode_length
+    
+    # send zero position command to all actuators
+    logger.info("Sending zero position command to all actuators...")
+    zero_action = np.zeros(len(actuator_mapping))  # This is in radians
+    await send_actions(kos, zero_action, actuator_mapping)
+    logger.info("Waiting for actuators to reach zero position...")
+    await asyncio.sleep(1.0)  # Give time for actuators to reach zero position
 
     try:
         while time.time() < end_time:
             observation = observation.reshape(1, -1)
-            # move it all to the infer call
+            # Model only outputs position commands
             action = np.array(model.infer(observation)).reshape(-1)
-            position = action[: len(ACTUATOR_LIST)]
-            velocity = action[len(ACTUATOR_LIST) :]
+            
+            action = action / 2.0 
+            
+            
             observation, _ = await asyncio.gather(
-                get_observation(kos),
-                send_actions(kos, position, velocity),
+                get_observation(kos, actuator_mapping, prev_action),
+                send_actions(kos, action, actuator_mapping),
             )
 
+            prev_action = action
             if time.time() < target_time:
                 await asyncio.sleep(max(0, target_time - time.time()))
             else:
@@ -225,21 +366,63 @@ async def main(model_path: str, ip: str, episode_length: int, robot_urdf_path: s
 
     except asyncio.CancelledError:
         logger.info("Exiting...")
-        await disable(kos)
-        logger.info("Actuators disabled")
+        if no_render:
+            save_path = await kos.process_manager.stop_kclip("deployment")
+            logger.info("KClip saved to %s", save_path)
+
+        if cleanup_fn:
+            cleanup_fn()
 
         raise KeyboardInterrupt
 
     logger.info("Episode finished!")
 
+    if no_render:
+        await kos.process_manager.stop_kclip("deployment")
 
-# python -m ksim_kbot.kbot2.deploy_real --model_path /path/to/model
+    if cleanup_fn:
+        cleanup_fn()
+
+    # Plot IMU values
+    plt.figure(figsize=(12, 8))
+    
+    # Plot accelerometer values
+    plt.subplot(2, 1, 1)
+    plt.plot(imu_values['steps'], imu_values['accel_x'], label='X')
+    plt.plot(imu_values['steps'], imu_values['accel_y'], label='Y')
+    plt.plot(imu_values['steps'], imu_values['accel_z'], label='Z')
+    plt.title('Accelerometer Values')
+    plt.xlabel('Simulation Step')
+    plt.ylabel('Acceleration')
+    plt.legend()
+    plt.grid(True)
+    
+    # Plot gyroscope values
+    plt.subplot(2, 1, 2)
+    plt.plot(imu_values['steps'], imu_values['gyro_x'], label='X')
+    plt.plot(imu_values['steps'], imu_values['gyro_y'], label='Y')
+    plt.plot(imu_values['steps'], imu_values['gyro_z'], label='Z')
+    plt.title('Gyroscope Values')
+    plt.xlabel('Simulation Step')
+    plt.ylabel('Angular Velocity')
+    plt.legend()
+    plt.grid(True)
+    
+    plt.tight_layout()
+    plt.savefig('imu_values.png')
+    plt.show()
+
+
+# (optionally) start the KOS-Sim server before running this script
+# `kos-sim zbot2-feet`
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--ip", type=str, default="localhost")
-    parser.add_argument("--episode_length", type=int, default=60)  # seconds
+    parser.add_argument("--episode_length", type=int, default=5)  # seconds
+    parser.add_argument("--no-render", action="store_true")
+    parser.add_argument("--log-file", type=str, help="Path to write log output")
 
     # Add arguments to mirror standing.py configuration
     parser.add_argument(
@@ -254,8 +437,46 @@ if __name__ == "__main__":
         default="ksim_zbot/kscale-assets/actuators/feetech/",
         help="The path to the assets directory for feetech actuator models",
     )
-
+    parser.add_argument(
+        "--metadata_path",
+        type=str,
+        help="Path to metadata.json file. If not specified, will look in robot_urdf_path/metadata.json",
+    )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
-    asyncio.run(main(args.model_path, args.ip, args.episode_length, args.robot_urdf_path, args.actuator_params_path))
+    # log_level: logging._Level = logging.DEBUG if args.debug else logging.INFO
+    log_level: int = logging.INFO
+    log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+    if args.log_file:
+        logging.basicConfig(
+            level=log_level,
+            format=log_format,
+            filename=args.log_file,
+            filemode="w",
+        )
+    else:
+        logging.basicConfig(level=log_level, format=log_format)
+
+    logger.info("Starting deployment with model: %s", args.model_path)
+    logger.info("Episode length: %s", args.episode_length)
+    logger.info("No render: %s", args.no_render)
+    logger.info("Robot URDF path: %s", args.robot_urdf_path)
+    logger.info("Actuator params path: %s", args.actuator_params_path)
+    logger.info("Metadata path: %s", args.metadata_path)
+    logger.info("IP: %s", args.ip)
+    logger.info("Debug: %s", args.debug)
+    
+    ip = args.ip  # Update global IP variable
+
+    asyncio.run(
+        main(
+            args.model_path,
+            args.ip,
+            args.no_render,
+            args.episode_length,
+            args.robot_urdf_path,
+            args.actuator_params_path,
+            args.metadata_path,
+        )
+    )
