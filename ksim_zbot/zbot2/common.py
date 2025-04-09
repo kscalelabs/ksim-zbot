@@ -98,8 +98,8 @@ class FeetechActuators(Actuators):
         vin_j: Array,
         kt_j: Array,
         r_j: Array,
+        error_gain_j: Array,
         dt: float,
-        error_gain_data_j: list[ErrorGainData],  # Mandatory
         action_noise: float = 0.0,
         action_noise_type: NoiseType = "none",
         torque_noise: float = 0.0,
@@ -113,6 +113,7 @@ class FeetechActuators(Actuators):
         self.vin_j = vin_j
         self.kt_j = kt_j
         self.r_j = r_j
+        self.error_gain_j = error_gain_j
         self.dt = dt
         self.prev_qtarget_j = jnp.zeros_like(self.kp_j)
         self.action_noise = action_noise
@@ -121,64 +122,8 @@ class FeetechActuators(Actuators):
         self.torque_noise_type = torque_noise_type
 
         j = kp_j.shape[0]  # num outputs
+        logger.info(f"Initializing {j} Feetech actuators")
 
-        self.a_params = jnp.array([0.00005502] * j)  # 3250 params by default
-        self.b_params = jnp.array([0.16293639] * j)  # 3250 params by default
-
-        # Default min/max values for error clamping
-        default_min = 0.001
-        default_max = 0.15
-        self.pos_err_min = jnp.array([default_min] * j)
-        self.pos_err_max = jnp.array([default_max] * j)
-
-        if len(error_gain_data_j) != j:
-            raise ValueError(
-                f"Length of error_gain_data ({len(error_gain_data_j)}) must match number of actuators ({j})."
-            )
-
-        # Fit a/x + b parameters for each actuator
-        for i, err_data in enumerate(error_gain_data_j):
-            if err_data is None or len(err_data) < 3:
-                logger.warning("Actuator %d: Not enough error_gain_data. Using default values.", i)
-                continue
-
-            err_data_sorted = sorted(err_data, key=lambda d: d["pos_err"])
-            x_vals = np.array([d["pos_err"] for d in err_data_sorted])
-            if len(set(x_vals)) != len(x_vals):
-                logger.warning("Actuator %d: Duplicate pos_err. Using default values.", i)
-                continue
-
-            # Record min/max error values for clamping
-            min_err = float(np.min(x_vals))
-            max_err = float(np.max(x_vals))
-            self.pos_err_min = self.pos_err_min.at[i].set(min_err)
-            self.pos_err_max = self.pos_err_max.at[i].set(max_err)
-            logger.info("Actuator %d: Error range [%f, %f]", i, min_err, max_err)
-
-            y_vals = np.array([d["error_gain"] for d in err_data_sorted])
-            try:
-
-                def inverse_func(x: Array, a: Array, b: Array) -> Array:
-                    return a / x + b
-
-                # Fit the a/x + b function to the data
-                popt, _ = curve_fit(inverse_func, x_vals, y_vals)
-                a_opt, b_opt = popt
-                self.a_params = self.a_params.at[i].set(float(a_opt))
-                self.b_params = self.b_params.at[i].set(float(b_opt))
-                logger.info("Actuator %d: Fitted parameters a=%f, b=%f", i, a_opt, b_opt)
-            except Exception as e:
-                logger.warning(
-                    "Actuator %d: Error fitting curve: %s. Using default values a=%f, b=%f.",
-                    i,
-                    e,
-                    self.a_params[i],
-                    self.b_params[i],
-                )
-
-    def _eval_reciprocal_func(self, x_val: Array, a: Array, b: Array) -> Array:
-        """Evaluate a/x + b function for error gain calculation."""
-        return a / x_val + b
 
     def get_ctrl(self, action_j: Array, physics_data: PhysicsData, rng: PRNGKeyArray) -> Array:
         """Compute torque control with velocity smoothing and duty cycle clipping (JAX friendly)."""
@@ -195,22 +140,8 @@ class FeetechActuators(Actuators):
         pos_error_j = action_j - current_pos_j
         vel_error_j = expected_velocity_j - current_vel_j
 
-        def process_single_joint(err: Array, a: Array, b: Array, pos_err_min: Array, pos_err_max: Array) -> Array:
-            abs_err = jnp.abs(err)
-            x_clamped = jnp.clip(abs_err, pos_err_min, pos_err_max)
-            return self._eval_reciprocal_func(x_clamped, a, b)
-
-        # Compute error gain using a/x + b formula
-        error_gain_j = jax.vmap(process_single_joint)(
-            pos_error_j,
-            self.a_params,
-            self.b_params,
-            self.pos_err_min,
-            self.pos_err_max,
-        )
-
         # Compute raw duty cycle and clip by max_pwm
-        raw_duty_j = self.kp_j * error_gain_j * pos_error_j + self.kd_j * vel_error_j
+        raw_duty_j = self.kp_j * self.error_gain_j * pos_error_j + self.kd_j * vel_error_j
         duty_j = jnp.clip(raw_duty_j, -self.max_pwm_j, self.max_pwm_j)
 
         # Compute torque
@@ -235,6 +166,23 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
     def get_input_shapes(self) -> list[tuple[int, ...]]:
         """Returns a list of shapes expected by the exported model's inference function."""
         raise NotImplementedError()
+
+    def _configure_actuator_params(
+        self,
+        mj_model: mujoco.MjModel,
+        dof_id: int,
+        joint_name: str,
+        params: FeetechParams,
+    ) -> None:
+        """Configure actuator parameters for a joint."""
+        mj_model.dof_damping[dof_id] = params["damping"]
+        mj_model.dof_armature[dof_id] = params["armature"]
+        mj_model.dof_frictionloss[dof_id] = params["frictionloss"]
+        actuator_name = f"{joint_name}_ctrl"
+        actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
+        if actuator_id >= 0:
+            max_torque = float(params["max_torque"])
+            mj_model.actuator_forcerange[actuator_id, :] = [-max_torque, max_torque]
 
     def get_mujoco_model(self) -> mujoco.MjModel:
         mjcf_path = (Path(self.config.robot_urdf_path) / "robot.mjcf").resolve().as_posix()
@@ -282,30 +230,9 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
 
             # Apply parameters based on the joint suffix
             if "feetech-sts3215" in actuator_type:  # STS3215 servos (arms)
-                mj_model.dof_damping[dof_id] = sts3215_params["damping"]
-                mj_model.dof_armature[dof_id] = sts3215_params["armature"]
-                mj_model.dof_frictionloss[dof_id] = sts3215_params["frictionloss"]
-                actuator_name = f"{joint_name}_ctrl"
-                actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
-                if actuator_id >= 0:
-                    max_torque = float(sts3215_params["max_torque"])
-                    mj_model.actuator_forcerange[actuator_id, :] = [
-                        -max_torque,
-                        max_torque,
-                    ]
-
+                self._configure_actuator_params(mj_model, dof_id, joint_name, sts3215_params)
             elif "feetech-sts3250" in actuator_type:  # STS3250 servos (legs)
-                mj_model.dof_damping[dof_id] = sts3250_params["damping"]
-                mj_model.dof_armature[dof_id] = sts3250_params["armature"]
-                mj_model.dof_frictionloss[dof_id] = sts3250_params["frictionloss"]
-                actuator_name = f"{joint_name}_ctrl"
-                actuator_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
-                if actuator_id >= 0:
-                    max_torque = float(sts3250_params["max_torque"])
-                    mj_model.actuator_forcerange[actuator_id, :] = [
-                        -max_torque,
-                        max_torque,
-                    ]
+                self._configure_actuator_params(mj_model, dof_id, joint_name, sts3250_params)
 
         return mj_model
 
@@ -470,27 +397,19 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
         r_j = jnp.zeros(num_joints)
         kp_j = jnp.zeros(num_joints)
         kd_j = jnp.zeros(num_joints)
-
+        error_gain_j = jnp.zeros(num_joints)
         # Load Feetech parameters
         feetech_params_dict = self._load_feetech_params()
         sts3215_params = feetech_params_dict["sts3215"]
         sts3250_params = feetech_params_dict["sts3250"]
 
         # Validate parameters
-        required_keys = ["max_torque", "error_gain_data", "max_velocity", "max_pwm", "vin", "kt", "R"]
+        required_keys = ["max_torque", "error_gain", "max_velocity", "max_pwm", "vin", "kt", "R"]
         for key in required_keys:
             if key not in sts3215_params:
                 raise ValueError(f"Missing required key '{key}' in sts3215 parameters.")
             if key not in sts3250_params:
                 raise ValueError(f"Missing required key '{key}' in sts3250 parameters.")
-
-        if not isinstance(sts3215_params["error_gain_data"], list):
-            raise ValueError("sts3215_params['error_gain_data'] must be a list.")
-        if not isinstance(sts3250_params["error_gain_data"], list):
-            raise ValueError("sts3250_params['error_gain_data'] must be a list.")
-
-        # Build a list of error_gain_data (one entry per joint)
-        error_gain_data_list_j: list[ErrorGainData] = []
 
         # Sort joint_mappings by actuator_id to ensure correct ordering
         sorted_joints = sorted(self.joint_mappings.items(), key=lambda x: x[1]["actuator_id"])
@@ -521,7 +440,7 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
             vin_j = vin_j.at[i].set(params["vin"])
             kt_j = kt_j.at[i].set(params["kt"])
             r_j = r_j.at[i].set(params["R"])
-            error_gain_data_list_j.append(params["error_gain_data"])
+            error_gain_j = error_gain_j.at[i].set(params["error_gain"])
 
             # Set kp and kd values
             if joint_meta.kp is None or joint_meta.kd is None:
@@ -544,7 +463,7 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
             kp_j=kp_j,
             kd_j=kd_j,
             dt=self.config.dt,
-            error_gain_data_j=error_gain_data_list_j,
+            error_gain_j=error_gain_j,
             action_noise=0.0,
             action_noise_type="none",
             torque_noise=0.0,
