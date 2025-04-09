@@ -70,12 +70,12 @@ def load_actuator_mapping(metadata_path: str | Path) -> dict:
                 "nn_id": nn_id - 1,  # MuJoCo uses 0-based indexing
             }
         else:
-            logger.warning(f"Joint {joint_name} not found in metadata")
+            logger.warning("Joint %s not found in metadata", joint_name)
 
     # Log the mapping for verification
     logger.info("Actuator mapping (MuJoCo order):")
     for actuator_id, mapping in sorted(actuator_mapping.items(), key=lambda x: x[1]["nn_id"]):
-        logger.info(f"Joint: {mapping['joint_name']:20} nn_id: {mapping['nn_id']:2d} actuator_id: {actuator_id:2d}")
+        logger.info("Joint: %-20s nn_id: %2d actuator_id: %2d", mapping["joint_name"], mapping["nn_id"], actuator_id)
 
     return actuator_mapping
 
@@ -93,7 +93,6 @@ async def get_observation(
     )
 
     # Convert gyro values from degrees to radians
-    global ip
     if ip == "192.168.42.1":
         imu.gyro_x = np.deg2rad(imu.gyro_x)
         imu.gyro_y = np.deg2rad(imu.gyro_y)
@@ -137,14 +136,8 @@ async def send_actions(kos: pykos.KOS, position: np.ndarray, actuator_mapping: d
     """Send actions using actuator mapping from metadata."""
     position = np.rad2deg(position)
     nn_id_to_actuator_id = list(actuator_mapping.items())
-    actuator_commands: list[pykos.services.actuator.ActuatorCommand] = [
-        {
-            "actuator_id": actuator_id,
-            "position": position[mapping["nn_id"]],
-        }
-        for actuator_id, mapping in nn_id_to_actuator_id
-    ]
-    logger.info(f" actuator commands: {actuator_commands}")
+    actuator_commands = [(actuator_id, mapping["actuator_id"]) for actuator_id, mapping in nn_id_to_actuator_id]
+    logger.info(" actuator commands: %s", actuator_commands)
     await kos.actuator.command_actuators(actuator_commands)
 
 

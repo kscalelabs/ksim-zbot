@@ -641,9 +641,9 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
                 actuator_id = int(metadata[joint_name]["id"])
                 joint_mappings[joint_name] = {"nn_id": nn_id, "actuator_id": actuator_id}
 
-                debug_lines.append(f"{joint_name:<30} -> nn_id: {nn_id:2d}, actuator_id: {actuator_id:2d}")
+                debug_lines.append("%-30s -> nn_id: %2d, actuator_id: %2d" % (joint_name, nn_id, actuator_id))
             else:
-                logger.warning(f"Joint {joint_name} not found in metadata")
+                logger.warning("Joint %s not found in metadata", joint_name)
 
         logger.info("\n".join(debug_lines))
         return joint_mappings

@@ -29,8 +29,16 @@ for filename in PARAMS_FILES:
 NUM_ACTUATORS = 1
 
 
+class MockPhysicsData:
+    """Mock class for physics data used in testing."""
+
+    def __init__(self) -> None:
+        self.qpos = jnp.zeros(NUM_ACTUATORS + 7)
+        self.qvel = jnp.zeros(NUM_ACTUATORS + 6)
+
+
 @pytest.fixture
-def real_feetech_params(request):
+def real_feetech_params(request: pytest.FixtureRequest) -> dict:
     """Load Feetech parameters from the specified JSON file."""
     filename = request.param
     params_file_path = ASSETS_DIR / filename
@@ -50,18 +58,18 @@ def real_feetech_params(request):
 
 
 @pytest.fixture
-def mock_physics_data():
-    class MockPhysicsData:
-        def __init__(self):
-            self.qpos = jnp.zeros(NUM_ACTUATORS + 7)
-            self.qvel = jnp.zeros(NUM_ACTUATORS + 6)
-
+def mock_physics_data() -> MockPhysicsData:
+    """Fixture that provides a MockPhysicsData instance."""
     return MockPhysicsData()
 
 
 @pytest.mark.parametrize("real_feetech_params", PARAMS_FILES, indirect=True)
 @pytest.mark.parametrize("jit_enabled", [True, False])
-def test_actuator_basic_functionality(real_feetech_params, mock_physics_data, jit_enabled):
+def test_actuator_basic_functionality(
+    real_feetech_params: dict,
+    mock_physics_data: MockPhysicsData,
+    jit_enabled: bool,
+) -> None:
     """Test basic actuator functionality with both JIT enabled and disabled."""
     # Configure JIT based on parameter
     if not jit_enabled:

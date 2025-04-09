@@ -64,12 +64,12 @@ def load_actuator_mapping(metadata_path: str | Path) -> dict:
                 "nn_id": nn_id - 1,  # MuJoCo uses 0-based indexing
             }
         else:
-            logger.warning(f"Joint {joint_name} not found in metadata")
+            logger.warning("Joint %s not found in metadata", joint_name)
 
     # Log the mapping for verification
     logger.info("Actuator mapping (MuJoCo order):")
     for actuator_id, mapping in sorted(actuator_mapping.items(), key=lambda x: x[1]["nn_id"]):
-        logger.info(f"Joint: {mapping['joint_name']:20} nn_id: {mapping['nn_id']:2d} actuator_id: {actuator_id:2d}")
+        logger.info("Joint: %-20s nn_id: %2d actuator_id: %2d", mapping["joint_name"], mapping["nn_id"], actuator_id)
 
     return actuator_mapping
 
