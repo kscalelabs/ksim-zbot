@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 import types
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -16,11 +17,11 @@ from typing import Callable
 import numpy as np
 import pykos
 import tensorflow as tf
-import xml.etree.ElementTree as ET
 
 logger = logging.getLogger(__name__)
 
 DT = 0.02  # Policy time step (50Hz)
+
 
 @dataclass
 class Actuator:
@@ -31,11 +32,12 @@ class Actuator:
     max_torque: float
     joint_name: str
 
+
 def load_actuator_mapping(metadata_path: str | Path) -> dict:
     """Load actuator mapping using MuJoCo model joint order but return actuator_id keyed mapping."""
     metadata_path = Path(metadata_path)
     mjcf_path = metadata_path.parent / "robot.mjcf"
-    
+
     # Load metadata
     with open(metadata_path, "r") as f:
         metadata = json.load(f)
@@ -59,7 +61,7 @@ def load_actuator_mapping(metadata_path: str | Path) -> dict:
             actuator_id = int(joint_metadata[joint_name]["id"])
             actuator_mapping[actuator_id] = {
                 "joint_name": joint_name,
-                "nn_id": nn_id - 1  # MuJoCo uses 0-based indexing
+                "nn_id": nn_id - 1,  # MuJoCo uses 0-based indexing
             }
         else:
             logger.warning(f"Joint {joint_name} not found in metadata")

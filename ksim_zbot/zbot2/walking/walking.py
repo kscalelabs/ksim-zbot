@@ -2,6 +2,7 @@
 
 import logging
 from dataclasses import dataclass
+from typing import Self
 
 import attrs
 import distrax
@@ -12,16 +13,13 @@ import ksim
 import optax
 import xax
 from jaxtyping import Array, PRNGKeyArray, PyTree
-from typing import Self
 from ksim.curriculum import ConstantCurriculum, Curriculum
 from ksim.observation import ObservationState
 from ksim.types import PhysicsState
+from ksim.utils.mujoco import get_qpos_data_idxs_by_name
 from xax.utils.types.frozen_dict import FrozenDict
 
 from ksim_zbot.zbot2.common import ZbotTask, ZbotTaskConfig
-
-from ksim.utils.mujoco import get_qpos_data_idxs_by_name
-
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +83,7 @@ class JointDeviationPenalty(ksim.Reward):
             diff = trajectory.qpos[7:] - jnp.zeros_like(trajectory.qpos[7:])
             x = jnp.sum(jnp.square(diff))
         return x
+
 
 @attrs.define(frozen=True, kw_only=True)
 class TargetedJointDeviationPenalty(ksim.Reward):
@@ -189,7 +188,8 @@ class LinearVelocityTrackingReward(ksim.Reward):
             trajectory.command[self.command_name][..., :2] - trajectory.obs[self.linvel_obs_name][..., :2], self.norm
         ).sum(axis=-1)
         return jnp.exp(-lin_vel_error / self.error_scale)
-    
+
+
 @attrs.define(frozen=True, kw_only=True)
 class HipDeviationPenalty(ksim.Reward):
     """Penalty for hip joint deviations."""

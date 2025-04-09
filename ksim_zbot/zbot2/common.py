@@ -493,14 +493,14 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
             # Build a list of error_gain_data (one entry per joint)
             error_gain_data_list_j: list[ErrorGainData] = []
 
-             # Sort joint_mappings by actuator_id to ensure correct ordering
+            # Sort joint_mappings by actuator_id to ensure correct ordering
             sorted_joints = sorted(self.joint_mappings.items(), key=lambda x: x[1]["actuator_id"])
 
             for i, (joint_name, mapping) in enumerate(sorted_joints):
                 joint_meta = metadata[joint_name]
                 if not isinstance(joint_meta, dict):
                     raise TypeError(f"Metadata entry for joint '{joint_name}' must be a dictionary.")
-                
+
                 actuator_type = joint_meta.get("actuator_type")
                 if actuator_type is None:
                     raise ValueError(f"'actuator_type' is not available for joint {joint_name}")
@@ -600,19 +600,18 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
 
         return state
 
-
     def create_joint_mappings(self, physics_model: ksim.PhysicsModel, metadata: dict[str, dict]) -> dict[str, dict]:
         """Creates mappings between joint names, nn_ids, and actuator_ids.
-        
+
         Args:
             physics_model: The MuJoCo/MJX model containing joint information
             metadata: The joint metadata dictionary from metadata.json
-        
+
         Returns:
             Dictionary mapping joint names to their nn_id and actuator_id
         """
         debug_lines = ["==== Joint Name to ID Mappings ===="]
-        
+
         # Get ordered list of joints from MuJoCo/MJX model
         if isinstance(physics_model, mujoco.MjModel):
             mujoco_joints = [
@@ -621,36 +620,30 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
                 if mujoco.mj_id2name(physics_model, mujoco.mjtObj.mjOBJ_JOINT, i) is not None
             ]
         else:  # MJX model
+
             def extract_joint_name(model: mjx.Model, idx: int) -> Optional[str]:
                 adr = model.name_jntadr[idx]
                 if adr < 0:
                     return None
                 end = model.names.find(b"\x00", adr)
                 return model.names[adr:end].decode("utf-8")
-            
+
             mujoco_joints = [
-                name for i in range(physics_model.njnt)
-                if (name := extract_joint_name(physics_model, i)) is not None
+                name for i in range(physics_model.njnt) if (name := extract_joint_name(physics_model, i)) is not None
             ]
 
         # Create mappings using joint names as keys
         joint_mappings = {}
-        
+
         # Map each joint, using MuJoCo order for nn_ids
         for nn_id, joint_name in enumerate(mujoco_joints):
             if joint_name in metadata:
                 actuator_id = int(metadata[joint_name]["id"])
-                joint_mappings[joint_name] = {
-                    "nn_id": nn_id,
-                    "actuator_id": actuator_id
-                }
-                
-                debug_lines.append(
-                    f"{joint_name:<30} -> nn_id: {nn_id:2d}, "
-                    f"actuator_id: {actuator_id:2d}"
-                )
+                joint_mappings[joint_name] = {"nn_id": nn_id, "actuator_id": actuator_id}
+
+                debug_lines.append(f"{joint_name:<30} -> nn_id: {nn_id:2d}, actuator_id: {actuator_id:2d}")
             else:
                 logger.warning(f"Joint {joint_name} not found in metadata")
-        
+
         logger.info("\n".join(debug_lines))
         return joint_mappings

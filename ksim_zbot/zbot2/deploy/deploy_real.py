@@ -9,28 +9,25 @@ import subprocess
 import sys
 import time
 import types
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pykos
 import tensorflow as tf
-import xml.etree.ElementTree as ET
-import matplotlib.pyplot as plt
 
 logger = logging.getLogger(__name__)
 
 # Store IMU values for plotting
-imu_values = {
-    'accel_x': [], 'accel_y': [], 'accel_z': [],
-    'gyro_x': [], 'gyro_y': [], 'gyro_z': [],
-    'steps': []
-}
+imu_values = {"accel_x": [], "accel_y": [], "accel_z": [], "gyro_x": [], "gyro_y": [], "gyro_z": [], "steps": []}
 step_counter = 0
 ip = None  # Global IP variable
 
 DT = 0.02  # Policy time step (50Hz)
+
 
 @dataclass
 class Actuator:
@@ -41,11 +38,12 @@ class Actuator:
     max_torque: float
     joint_name: str
 
+
 def load_actuator_mapping(metadata_path: str | Path) -> dict:
     """Load actuator mapping using MuJoCo model joint order but return actuator_id keyed mapping."""
     metadata_path = Path(metadata_path)
     mjcf_path = metadata_path.parent / "robot.mjcf"
-    
+
     # Load metadata
     with open(metadata_path, "r") as f:
         metadata = json.load(f)
@@ -69,7 +67,7 @@ def load_actuator_mapping(metadata_path: str | Path) -> dict:
             actuator_id = int(joint_metadata[joint_name]["id"])
             actuator_mapping[actuator_id] = {
                 "joint_name": joint_name,
-                "nn_id": nn_id - 1  # MuJoCo uses 0-based indexing
+                "nn_id": nn_id - 1,  # MuJoCo uses 0-based indexing
             }
         else:
             logger.warning(f"Joint {joint_name} not found in metadata")
@@ -93,26 +91,26 @@ async def get_observation(
         kos.actuator.get_actuators_state(actuator_ids),
         kos.imu.get_imu_values(),
     )
-    
-        # Convert gyro values from degrees to radians
+
+    # Convert gyro values from degrees to radians
     global ip
     if ip == "192.168.42.1":
         imu.gyro_x = np.deg2rad(imu.gyro_x)
         imu.gyro_y = np.deg2rad(imu.gyro_y)
         imu.gyro_z = np.deg2rad(imu.gyro_z)
-        
+
     gravity_bias = 9.81
-    
+
     imu.accel_z = imu.accel_z + gravity_bias
 
     # Store IMU values for plotting
-    imu_values['accel_x'].append(imu.accel_x)
-    imu_values['accel_y'].append(imu.accel_y)
-    imu_values['accel_z'].append(imu.accel_z)
-    imu_values['gyro_x'].append(imu.gyro_x)
-    imu_values['gyro_y'].append(imu.gyro_y)
-    imu_values['gyro_z'].append(imu.gyro_z)
-    imu_values['steps'].append(step_counter)
+    imu_values["accel_x"].append(imu.accel_x)
+    imu_values["accel_y"].append(imu.accel_y)
+    imu_values["accel_z"].append(imu.accel_z)
+    imu_values["gyro_x"].append(imu.gyro_x)
+    imu_values["gyro_y"].append(imu.gyro_y)
+    imu_values["gyro_z"].append(imu.gyro_z)
+    imu_values["steps"].append(step_counter)
     step_counter += 1
 
     nn_id_to_actuator_id = list(actuator_mapping.items())
@@ -124,10 +122,8 @@ async def get_observation(
     pos_obs = np.deg2rad([state_dict_pos[act_id] for act_id, _ in nn_id_to_actuator_id])
     vel_obs = np.deg2rad([state_dict_vel[act_id] for act_id, _ in nn_id_to_actuator_id])
 
-
-
     imu_obs = np.array([imu.accel_x, imu.accel_y, imu.accel_z, imu.gyro_x, imu.gyro_y, imu.gyro_z])
-    
+
     print(f"imu accel x: {imu.accel_x}, imu accel y: {imu.accel_y}, imu accel z: {imu.accel_z}")
     print(f"imu gyro x: {imu.gyro_x}, imu gyro y: {imu.gyro_y}, imu gyro z: {imu.gyro_z}")
 
@@ -213,7 +209,7 @@ async def configure_actuators(
         else:
             logger.error("Unknown actuator type %s for joint %s", actuator_type, joint_name)
             raise ValueError(f"Unknown actuator type {actuator_type} for joint {joint_name}")
-        
+
         print(f"configure actuator_id: {actuator_id}, kp: {kp}, kd: {kd}, max_torque: {max_torque}")
 
         # Configure the actuator through KOS API
@@ -223,7 +219,7 @@ async def configure_actuators(
             kd=kd,
             torque_enabled=True,
             # max_torque=max_torque,
-            acceleration=750
+            acceleration=750,
         )
 
 
@@ -334,7 +330,7 @@ async def main(
     observation = await get_observation(kos, actuator_mapping, prev_action)
 
     end_time = time.time() + episode_length
-    
+
     # send zero position command to all actuators
     logger.info("Sending zero position command to all actuators...")
     zero_action = np.zeros(len(actuator_mapping))  # This is in radians
@@ -347,10 +343,9 @@ async def main(
             observation = observation.reshape(1, -1)
             # Model only outputs position commands
             action = np.array(model.infer(observation)).reshape(-1)
-            
-            action = action / 2.0 
-            
-            
+
+            action = action / 2.0
+
             observation, _ = await asyncio.gather(
                 get_observation(kos, actuator_mapping, prev_action),
                 send_actions(kos, action, actuator_mapping),
@@ -385,31 +380,31 @@ async def main(
 
     # Plot IMU values
     plt.figure(figsize=(12, 8))
-    
+
     # Plot accelerometer values
     plt.subplot(2, 1, 1)
-    plt.plot(imu_values['steps'], imu_values['accel_x'], label='X')
-    plt.plot(imu_values['steps'], imu_values['accel_y'], label='Y')
-    plt.plot(imu_values['steps'], imu_values['accel_z'], label='Z')
-    plt.title('Accelerometer Values')
-    plt.xlabel('Simulation Step')
-    plt.ylabel('Acceleration')
+    plt.plot(imu_values["steps"], imu_values["accel_x"], label="X")
+    plt.plot(imu_values["steps"], imu_values["accel_y"], label="Y")
+    plt.plot(imu_values["steps"], imu_values["accel_z"], label="Z")
+    plt.title("Accelerometer Values")
+    plt.xlabel("Simulation Step")
+    plt.ylabel("Acceleration")
     plt.legend()
     plt.grid(True)
-    
+
     # Plot gyroscope values
     plt.subplot(2, 1, 2)
-    plt.plot(imu_values['steps'], imu_values['gyro_x'], label='X')
-    plt.plot(imu_values['steps'], imu_values['gyro_y'], label='Y')
-    plt.plot(imu_values['steps'], imu_values['gyro_z'], label='Z')
-    plt.title('Gyroscope Values')
-    plt.xlabel('Simulation Step')
-    plt.ylabel('Angular Velocity')
+    plt.plot(imu_values["steps"], imu_values["gyro_x"], label="X")
+    plt.plot(imu_values["steps"], imu_values["gyro_y"], label="Y")
+    plt.plot(imu_values["steps"], imu_values["gyro_z"], label="Z")
+    plt.title("Gyroscope Values")
+    plt.xlabel("Simulation Step")
+    plt.ylabel("Angular Velocity")
     plt.legend()
     plt.grid(True)
-    
+
     plt.tight_layout()
-    plt.savefig('imu_values.png')
+    plt.savefig("imu_values.png")
     plt.show()
 
 
@@ -466,7 +461,7 @@ if __name__ == "__main__":
     logger.info("Metadata path: %s", args.metadata_path)
     logger.info("IP: %s", args.ip)
     logger.info("Debug: %s", args.debug)
-    
+
     ip = args.ip  # Update global IP variable
 
     asyncio.run(
