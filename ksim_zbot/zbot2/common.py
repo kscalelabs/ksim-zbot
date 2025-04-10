@@ -16,7 +16,7 @@ import xax
 from jaxtyping import Array, PRNGKeyArray
 from kscale.web.gen.api import JointMetadataOutput
 from ksim.actuators import Actuators, NoiseType
-from ksim.types import PhysicsData
+from ksim.types import PhysicsData, PlannerState
 from mujoco import mjx
 from mujoco_scenes.mjcf import load_mjmodel
 from xax.nn.export import export
@@ -78,9 +78,39 @@ class FeetechParams(TypedDict):
     vin: float
     kt: float
     R: float
+    vmax: float
+    amax: float
     max_velocity: float
     max_pwm: float
     error_gain: float
+
+def trapezoidal_step(state: PlannerState, target_position: Array, dt: float) -> tuple[PlannerState, tuple[Array, Array]]:
+    v_max = 5.0
+    a_max = 39.0
+
+    position_error = target_position - state.position
+    direction = jnp.sign(position_error)
+
+    stopping_distance = (state.velocity ** 2) / (2 * a_max)
+
+    # Decide accelerate or decelerate
+    should_accelerate = jnp.abs(position_error) > stopping_distance
+
+    acceleration = jnp.where(should_accelerate, direction * a_max, -direction * a_max)
+    new_velocity = state.velocity + acceleration * dt
+
+    # Clamp velocity
+    new_velocity = jnp.clip(new_velocity, -v_max, v_max)
+
+    # Prevent overshoot when decelerating
+    new_velocity = jnp.where(direction * new_velocity < 0, 0.0, new_velocity)
+
+    new_position = state.position + new_velocity * dt
+
+    new_state = PlannerState(position=new_position, velocity=new_velocity)
+
+    return new_state, (new_position, new_velocity)
+
 
 
 def load_actuator_params(params_path: str, actuator_type: str) -> FeetechParams:
@@ -106,6 +136,8 @@ class FeetechActuators(Actuators):
         vin_j: Array,
         kt_j: Array,
         r_j: Array,
+        vmax_j: Array,
+        amax_j: Array,
         error_gain_j: Array,
         dt: float,
         action_noise: float = 0.0,
@@ -121,28 +153,31 @@ class FeetechActuators(Actuators):
         self.vin_j = vin_j
         self.kt_j = kt_j
         self.r_j = r_j
+        self.vmax_j = vmax_j
+        self.amax_j = amax_j
         self.error_gain_j = error_gain_j
         self.dt = dt
-        self.prev_qtarget_j = jnp.zeros_like(self.kp_j)
+        #self.prev_qtarget_j = jnp.zeros_like(self.kp_j)
         self.action_noise = action_noise
         self.action_noise_type = action_noise_type
         self.torque_noise = torque_noise
         self.torque_noise_type = torque_noise_type
 
-    def get_ctrl(self, action_j: Array, physics_data: PhysicsData, rng: PRNGKeyArray) -> Array:
+    def get_ctrl(self, planner_state: PlannerState, action_j: Array, physics_data: PhysicsData, rng: PRNGKeyArray) -> tuple[PlannerState, Array]:
         """Compute torque control with velocity smoothing and duty cycle clipping (JAX friendly)."""
         pos_rng, tor_rng = jax.random.split(rng)
 
         current_pos_j = physics_data.qpos[7:]
         current_vel_j = physics_data.qvel[6:]
 
-        # Initialize with current position on first step to prevent velocity spike
-        self.prev_qtarget = getattr(self, "prev_qtarget", current_pos_j)
-        expected_velocity_j = (action_j - self.prev_qtarget) / self.dt
-        self.prev_qtarget = action_j
+        planner_state, (desired_position, desired_velocity) = trapezoidal_step(
+            planner_state,
+            action_j,
+            self.dt
+        )
 
-        pos_error_j = action_j - current_pos_j
-        vel_error_j = expected_velocity_j - current_vel_j
+        pos_error_j = desired_position - current_pos_j
+        vel_error_j = desired_velocity - current_vel_j
 
         # Compute raw duty cycle and clip by max_pwm
         raw_duty_j = self.kp_j * self.error_gain_j * pos_error_j + self.kd_j * vel_error_j
@@ -155,7 +190,7 @@ class FeetechActuators(Actuators):
         # Add noise to torque
         torque_j_noisy = self.add_noise(self.torque_noise, self.torque_noise_type, torque_j, tor_rng)
 
-        return torque_j_noisy
+        return planner_state, torque_j_noisy
 
     def get_default_action(self, physics_data: PhysicsData) -> Array:
         return physics_data.qpos[7:]
@@ -372,6 +407,10 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
         vin_j = jnp.zeros(num_joints)
         kt_j = jnp.zeros(num_joints)
         r_j = jnp.zeros(num_joints)
+        #vmax_j = jnp.zeros(num_joints)
+        #amax_j = jnp.zeros(num_joints)
+        vmax_j = jnp.ones(num_joints) * 5.0  # or whatever test value you want
+        amax_j = jnp.ones(num_joints) * 39.0
         kp_j = jnp.zeros(num_joints)
         kd_j = jnp.zeros(num_joints)
         error_gain_j = jnp.zeros(num_joints)
@@ -425,6 +464,8 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
             r_j=r_j,
             kp_j=kp_j,
             kd_j=kd_j,
+            vmax_j=vmax_j,
+            amax_j=amax_j,
             dt=self.config.dt,
             error_gain_j=error_gain_j,
             action_noise=0.0,
