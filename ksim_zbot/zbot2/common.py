@@ -41,8 +41,8 @@ class ZbotTaskConfig(ksim.PPOConfig):
     )
 
     actuator_params_path: str = xax.field(
-        value="ksim_zbot/kscale-assets/actuators/feetech/",
-        help="The path to the assets directory for feetech actuator models",
+        value="ksim_zbot/kscale-assets/actuators/",
+        help="The path to the assets directory for actuator models",
     )
 
     # Checkpointing parameters.
@@ -191,13 +191,8 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
         mj_model.opt.disableflags = mjx.DisableBit.EULERDAMP
         mj_model.opt.solver = mjx.SolverType.CG
 
-        feetech_params_dict = self._load_feetech_params()
-
+        # Validate parameters
         required_keys = ["damping", "armature", "frictionloss", "max_torque"]
-        for actuator_type, params in feetech_params_dict.items():
-            for key in required_keys:
-                if key not in params:
-                    raise ValueError(f"Missing required key '{key}' in {actuator_type} parameters.")
 
         # Apply servo-specific parameters based on joint metadata
         for i in range(mj_model.njnt):
@@ -218,8 +213,14 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
 
             dof_id = mj_model.jnt_dofadr[i]
 
+            # Load and validate parameters for this actuator type
+            params = self._load_actuator_params(joint_meta.actuator_type)
+            for key in required_keys:
+                if key not in params:
+                    raise ValueError(f"Missing required key '{key}' in {joint_meta.actuator_type} parameters.")
+
             # Apply parameters based on the joint suffix
-            self._configure_actuator_params(mj_model, dof_id, joint_name, feetech_params_dict[joint_meta.actuator_type])
+            self._configure_actuator_params(mj_model, dof_id, joint_name, params)
 
         return mj_model
 
@@ -343,29 +344,13 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
         # Convert raw metadata to JointMetadataOutput objects
         return {joint_name: JointMetadataOutput(**metadata) for joint_name, metadata in joint_metadata.items()}
 
-    def _load_feetech_params(self) -> dict[str, FeetechParams]:
+    def _load_actuator_params(self, actuator_type: str) -> FeetechParams:
         params_path = Path(self.config.actuator_params_path)
-        params_file_3215 = params_path / "sts3215_12v_params.json"
-        params_file_3250 = params_path / "sts3250_params.json"
-        if not params_file_3215.exists():
-            raise ValueError(
-                f"Feetech parameters file '{params_file_3215}' not found. Please ensure it exists in '{params_path}'."
-            )
-        if not params_file_3250.exists():
-            raise ValueError(
-                f"Feetech parameters file '{params_file_3250}' not found. Please ensure it exists in '{params_path}'."
-            )
-        with open(params_file_3215, "r") as f:
-            params_3215: FeetechParams = json.load(f)
-        with open(params_file_3250, "r") as f:
-            params_3250: FeetechParams = json.load(f)
-
-        return_dict = {
-            "feetech-sts3215-12v": params_3215,
-            "feetech-sts3250": params_3250,
-        }
-        logger.info("Loaded Feetech parameters: %s", return_dict)
-        return return_dict
+        params_file = params_path / f"{actuator_type}.json"
+        if not params_file.exists():
+            raise ValueError(f"Actuator parameters file '{params_file}' not found. Please ensure it exists in '{params_path}'.")
+        with open(params_file, "r") as f:
+            return json.load(f)
 
     def get_actuators(
         self,
@@ -388,15 +373,9 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
         kp_j = jnp.zeros(num_joints)
         kd_j = jnp.zeros(num_joints)
         error_gain_j = jnp.zeros(num_joints)
-        # Load Feetech parameters
-        feetech_params_dict = self._load_feetech_params()
 
         # Validate parameters
         required_keys = ["max_torque", "error_gain", "max_velocity", "max_pwm", "vin", "kt", "R"]
-        for actuator_type, params in feetech_params_dict.items():
-            for key in required_keys:
-                if key not in params:
-                    raise ValueError(f"Missing required key '{key}' in {actuator_type} parameters.")
 
         # Sort joint_mappings by actuator_id to ensure correct ordering
         sorted_joints = sorted(self.joint_mappings.items(), key=lambda x: x[1]["actuator_id"])
@@ -412,7 +391,13 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
             if not isinstance(actuator_type, str):
                 raise TypeError(f"'actuator_type' for joint {joint_name} must be a string.")
 
-            params = feetech_params_dict[actuator_type]
+            params = self._load_actuator_params(actuator_type)
+            
+            # Validate parameters
+            for key in required_keys:
+                if key not in params:
+                    raise ValueError(f"Missing required key '{key}' in {actuator_type} parameters.")
+
             max_torque_j = max_torque_j.at[i].set(params["max_torque"])
             max_velocity_j = max_velocity_j.at[i].set(params["max_velocity"])
             max_pwm_j = max_pwm_j.at[i].set(params["max_pwm"])
