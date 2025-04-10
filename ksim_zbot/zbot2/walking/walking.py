@@ -464,17 +464,17 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
 
     def get_rewards(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reward]:
         return [
-            HipDeviationPenalty.create(
-                physics_model=physics_model,
-                hip_names=(
-                    "right_hip_roll",
-                    "left_hip_roll",
-                    "right_hip_yaw",
-                    "left_hip_yaw",
-                ),
-                joint_targets=(-0.5, 0.5, 0.0, 0.0),
-                scale=-0.25,
-            ),
+            # HipDeviationPenalty.create(
+            #     physics_model=physics_model,
+            #     hip_names=(
+            #         "right_hip_roll",
+            #         "left_hip_roll",
+            #         "right_hip_yaw",
+            #         "left_hip_yaw",
+            #     ),
+            #     joint_targets=(-0.5, 0.5, 0.0, 0.0),
+            #     scale=-0.25,
+            # ),
             JointDeviationPenalty(scale=-1.0),
             DHControlPenalty(scale=-0.05),
             DHHealthyReward(scale=0.5),
