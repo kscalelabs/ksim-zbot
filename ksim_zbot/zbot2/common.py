@@ -83,6 +83,16 @@ class FeetechParams(TypedDict):
     error_gain: float
 
 
+def load_actuator_params(params_path: str, actuator_type: str) -> FeetechParams:
+    params_file = Path(params_path) / f"{actuator_type}.json"
+    if not params_file.exists():
+        raise ValueError(
+            f"Actuator parameters file '{params_file}' not found. Please ensure it exists in '{params_path}'."
+        )
+    with open(params_file, "r") as f:
+        return json.load(f)
+
+
 class FeetechActuators(Actuators):
     """Feetech actuator controller."""
 
@@ -214,7 +224,7 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
             dof_id = mj_model.jnt_dofadr[i]
 
             # Load and validate parameters for this actuator type
-            params = self._load_actuator_params(joint_meta.actuator_type)
+            params = load_actuator_params(self.config.actuator_params_path, joint_meta.actuator_type)
             for key in required_keys:
                 if key not in params:
                     raise ValueError(f"Missing required key '{key}' in {joint_meta.actuator_type} parameters.")
@@ -344,14 +354,6 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
         # Convert raw metadata to JointMetadataOutput objects
         return {joint_name: JointMetadataOutput(**metadata) for joint_name, metadata in joint_metadata.items()}
 
-    def _load_actuator_params(self, actuator_type: str) -> FeetechParams:
-        params_path = Path(self.config.actuator_params_path)
-        params_file = params_path / f"{actuator_type}.json"
-        if not params_file.exists():
-            raise ValueError(f"Actuator parameters file '{params_file}' not found. Please ensure it exists in '{params_path}'.")
-        with open(params_file, "r") as f:
-            return json.load(f)
-
     def get_actuators(
         self,
         physics_model: ksim.PhysicsModel,
@@ -391,8 +393,8 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
             if not isinstance(actuator_type, str):
                 raise TypeError(f"'actuator_type' for joint {joint_name} must be a string.")
 
-            params = self._load_actuator_params(actuator_type)
-            
+            params = load_actuator_params(self.config.actuator_params_path, actuator_type)
+
             # Validate parameters
             for key in required_keys:
                 if key not in params:

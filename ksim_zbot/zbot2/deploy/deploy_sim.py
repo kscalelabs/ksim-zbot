@@ -18,6 +18,8 @@ import numpy as np
 import pykos
 import tensorflow as tf
 
+from ksim_zbot.zbot2.common import load_actuator_params
+
 logger = logging.getLogger(__name__)
 
 DT = 0.02  # Policy time step (50Hz)
@@ -118,34 +120,11 @@ async def send_actions(kos: pykos.KOS, position: np.ndarray, actuator_mapping: d
     await kos.actuator.command_actuators(actuator_commands)
 
 
-def load_feetech_params(actuator_params_path: str) -> tuple[dict, dict]:
-    """Load Feetech parameters from files."""
-    params_path = Path(actuator_params_path)
-    params_file_3215 = params_path / "sts3215_12v_params.json"
-    params_file_3250 = params_path / "sts3250_params.json"
-
-    if not params_file_3215.exists():
-        raise ValueError(
-            f"Feetech parameters file '{params_file_3215}' not found. Please ensure it exists in '{params_path}'."
-        )
-    if not params_file_3250.exists():
-        raise ValueError(
-            f"Feetech parameters file '{params_file_3250}' not found. Please ensure it exists in '{params_path}'."
-        )
-
-    with open(params_file_3215, "r") as f:
-        params_3215 = json.load(f)
-    with open(params_file_3250, "r") as f:
-        params_3250 = json.load(f)
-    return params_3215, params_3250
-
-
 async def configure_actuators(
     kos: pykos.KOS, robot_urdf_path: str, actuator_params_path: str, metadata_path: str | None = None
 ) -> None:
     """Configure actuators using parameters from files."""
     # Load the Feetech parameters
-    sts3215_params, sts3250_params = load_feetech_params(actuator_params_path)
 
     if metadata_path:
         metadata_file = Path(metadata_path)
@@ -162,23 +141,12 @@ async def configure_actuators(
 
     # Configure each actuator from metadata
     for joint_name, joint_info in joint_metadata.items():
-        try:
-            actuator_id = int(joint_info["id"])
-            actuator_type = joint_info.get("actuator_type", "")
-            kp = float(joint_info["kp"])
-            kd = float(joint_info["kd"])
-        except (KeyError, ValueError) as e:
-            logger.error("Invalid metadata for joint %s: %s for joint %s", joint_name, e, joint_info)
-            raise e
-
-        # Determine max_torque based on actuator type
-        if "feetech-sts3215" in actuator_type:
-            max_torque = sts3215_params["max_torque"]
-        elif "feetech-sts3250" in actuator_type:
-            max_torque = sts3250_params["max_torque"]
-        else:
-            logger.error("Unknown actuator type %s for joint %s", actuator_type, joint_name)
-            raise ValueError(f"Unknown actuator type {actuator_type} for joint {joint_name}")
+        actuator_id = int(joint_info["id"])
+        actuator_type = joint_info.get("actuator_type", "")
+        kp = float(joint_info["kp"])
+        kd = float(joint_info["kd"])
+        params = load_actuator_params(actuator_params_path, actuator_type)
+        max_torque = params["max_torque"]
 
         # Configure the actuator through KOS API
         await kos.actuator.configure_actuator(
@@ -361,7 +329,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--actuator_params_path",
         type=str,
-        default="ksim_zbot/kscale-assets/actuators/feetech/",
+        default="ksim_zbot/kscale-assets/actuators/",
         help="The path to the assets directory for feetech actuator models",
     )
     parser.add_argument(
