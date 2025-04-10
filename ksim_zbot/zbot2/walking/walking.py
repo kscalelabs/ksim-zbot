@@ -13,9 +13,10 @@ import ksim
 import optax
 import xax
 from jaxtyping import Array, PRNGKeyArray, PyTree
+from ksim import Reward
 from ksim.curriculum import ConstantCurriculum, Curriculum
-from ksim.observation import ObservationState
-from ksim.types import PhysicsState
+from ksim.observation import ContactObservation, ObservationState
+from ksim.types import PhysicsState, Trajectory
 from ksim.utils.mujoco import get_qpos_data_idxs_by_name
 from xax.utils.types.frozen_dict import FrozenDict
 
@@ -222,6 +223,45 @@ class HipDeviationPenalty(ksim.Reward):
             joint_targets=joint_targets,
             scale=scale,
         )
+
+
+@attrs.define(frozen=True, kw_only=True)
+class FeetContactPenalty(Reward):
+    """Penalizes the robot when foot contact is detected.
+
+    This reward reads the precomputed contact observation from the trajectory. The
+    observation is expected to be a boolean array of shape (2,) in a single-environment
+    rollout or (num_envs, 2) in batched training mode. The reward reduces along the
+    last axis to yield a scalar per environment.
+    """
+
+    # The key under which the contact observation is stored.
+    contact_obs_key: str = attrs.field(default="contact_observation_feet")
+    # Use the reward object's scale field to set the penalty magnitude.
+    scale: float = attrs.field(default=-1.0)
+
+    def __call__(self, trajectory: Trajectory) -> jnp.ndarray:
+        target_shape = trajectory.done.shape  # Expected shape: () for a single env or (num_envs,) in batched mode.
+        contact_flag = trajectory.obs[self.contact_obs_key]
+
+        # If running in batched mode, ensure contact_flag has one extra dimension at the end.
+        if target_shape and contact_flag.ndim < (len(target_shape) + 1):
+            contact_flag = jnp.broadcast_to(contact_flag, target_shape + (contact_flag.shape[-1],))
+
+        # For single-environment mode (target_shape == ()), simply reduce the (2,) vector.
+        if not target_shape:
+            is_contact = jnp.any(contact_flag)
+        else:
+            # Now contact_flag is (batch, 2). Reduce along the last axis.
+            is_contact = jnp.any(contact_flag, axis=-1)
+
+        # Convert the Boolean to float: 1.0 if any contact, 0.0 otherwise.
+        contact_value = jnp.where(is_contact, 1.0, 0.0)
+        return contact_value
+
+    @property
+    def reward_name(self) -> str:
+        return "feet_contact_penalty"
 
 
 @attrs.define(frozen=True, kw_only=True)
@@ -439,6 +479,12 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
             ksim.SensorObservation.create(physics_model=physics_model, sensor_name="base_link_vel", noise=0.1),
             ksim.SensorObservation.create(physics_model=physics_model, sensor_name="base_link_ang_vel", noise=0.1),
             LastActionObservation(noise=0.0),
+            ContactObservation.create(
+                physics_model=physics_model,
+                geom_names=["Left_Foot_collision_box", "Right_Foot_collision_box"],
+                contact_group="feet",
+                noise=0.0,
+            ),
         ]
 
     def get_curriculum(self, physics_model: ksim.PhysicsModel) -> Curriculum:
@@ -464,17 +510,6 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
 
     def get_rewards(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reward]:
         return [
-            # HipDeviationPenalty.create(
-            #     physics_model=physics_model,
-            #     hip_names=(
-            #         "right_hip_roll",
-            #         "left_hip_roll",
-            #         "right_hip_yaw",
-            #         "left_hip_yaw",
-            #     ),
-            #     joint_targets=(-0.5, 0.5, 0.0, 0.0),
-            #     scale=-0.25,
-            # ),
             JointDeviationPenalty(scale=-1.0),
             DHControlPenalty(scale=-0.05),
             DHHealthyReward(scale=0.5),
@@ -482,7 +517,10 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
             TerminationPenalty(scale=-5.0),
             LinearVelocityTrackingReward(scale=2.0),
             AngularVelocityTrackingReward(scale=0.75),
-            # NaiveVelocityReward(scale=1.0),
+            FeetContactPenalty(
+                contact_obs_key="contact_observation_feet",
+                scale=-2.0,
+            ),
         ]
 
     def get_terminations(self, physics_model: ksim.PhysicsModel) -> list[ksim.Termination]:
