@@ -13,10 +13,10 @@ import pytest
 from ksim_zbot.zbot2.common import FeetechActuators
 
 # Base path for test assets
-ASSETS_DIR = Path(__file__).parent / "assets/actuators/feetech"
+ASSETS_DIR = Path(__file__).parent / "assets/actuators/"
 
 # Parameter filenames to test
-PARAMS_FILES = ["sts3250_params.json", "sts3215_12v_params.json"]
+PARAMS_FILES = ["feetech_sts3250.json", "feetech_sts3215_12v.json"]
 
 # --- Module-level check for parameter files ---
 # Construct full paths and fail early if any are missing
@@ -41,9 +41,10 @@ def real_feetech_params(request: pytest.FixtureRequest) -> dict:
     with open(params_file_path, "r") as f:
         params = json.load(f)
 
-    required_keys = ["max_torque", "max_velocity", "max_pwm", "vin", "kt", "R", "error_gain_data"]
-    if not all(key in params for key in required_keys):
-        raise ValueError(f"Parameter file {params_file_path} is missing required keys.")
+    required_keys = ["max_torque", "max_velocity", "max_pwm", "vin", "kt", "R", "error_gain"]
+    for key in required_keys:
+        if key not in params:
+            raise ValueError(f"Parameter file {params_file_path} is missing required key: {key}")
 
     params["_filename"] = filename
     return params
