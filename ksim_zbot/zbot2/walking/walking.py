@@ -199,8 +199,9 @@ class HipDeviationPenalty(ksim.Reward):
     joint_targets: tuple[float, ...] = attrs.field()
 
     def __call__(self, trajectory: ksim.Trajectory) -> Array:
+        # NOTE - fix that
         diff = (
-            trajectory.qpos[..., jnp.array(self.hip_indices)]
+            trajectory.qpos[..., jnp.array(self.hip_indices) + 7]
             - jnp.array(self.joint_targets)[jnp.array(self.hip_indices)]
         )
         return xax.get_norm(diff, self.norm).sum(axis=-1)
@@ -463,17 +464,17 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
 
     def get_rewards(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reward]:
         return [
-            # HipDeviationPenalty.create(
-            #     physics_model=physics_model,
-            #     hip_names=(
-            #         "right_hip_roll",
-            #         "left_hip_roll",
-            #         "right_hip_yaw",
-            #         "left_hip_yaw",
-            #     ),
-            #     joint_targets=(-0.5, 0.5, 0.0, 0.0),
-            #     scale=-5.0,
-            # ),
+            HipDeviationPenalty.create(
+                physics_model=physics_model,
+                hip_names=(
+                    "right_hip_roll",
+                    "left_hip_roll",
+                    "right_hip_yaw",
+                    "left_hip_yaw",
+                ),
+                joint_targets=(-0.5, 0.5, 0.0, 0.0),
+                scale=-0.25,
+            ),
             JointDeviationPenalty(scale=-1.0),
             DHControlPenalty(scale=-0.05),
             DHHealthyReward(scale=0.5),
