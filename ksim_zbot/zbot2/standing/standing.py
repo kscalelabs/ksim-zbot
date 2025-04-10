@@ -18,7 +18,7 @@ from ksim.types import PhysicsState
 from mujoco import mjx
 from xax.utils.types.frozen_dict import FrozenDict
 
-from ksim_zbot.zbot2.common import AuxOutputs, ZbotTaskConfig
+from ksim_zbot.zbot2.common import ZbotTaskConfig
 
 OBS_SIZE = 20 * 2 + 3 + 3 + 20  # position + velocity + imu_acc + imu_gyro + last_action
 CMD_SIZE = 2
@@ -26,19 +26,10 @@ NUM_OUTPUTS = 20  # position only for FeetechActuators (not position + velocity)
 
 SINGLE_STEP_HISTORY_SIZE = NUM_OUTPUTS + OBS_SIZE + CMD_SIZE
 
-HISTORY_LENGTH = 0
 
-NUM_INPUTS = (OBS_SIZE + CMD_SIZE) + SINGLE_STEP_HISTORY_SIZE * HISTORY_LENGTH
+NUM_INPUTS = (OBS_SIZE + CMD_SIZE) + SINGLE_STEP_HISTORY_SIZE
 
 Config = TypeVar("Config", bound="ZbotStandingTaskConfig")
-
-
-@attrs.define(frozen=True)
-class HistoryObservation(ksim.Observation):
-    def observe(self, state: ObservationState, rng: PRNGKeyArray) -> Array:
-        if not isinstance(state.carry, Array):
-            raise ValueError("Carry is not a history array")
-        return state.carry
 
 
 @attrs.define(frozen=True, kw_only=True)
@@ -414,7 +405,6 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
             ksim.SensorObservation.create(physics_model=physics_model, sensor_name="imu_acc", noise=0.5),
             ksim.SensorObservation.create(physics_model=physics_model, sensor_name="imu_gyro", noise=0.2),
             LastActionObservation(noise=0.0),
-            HistoryObservation(),
         ]
 
     def get_commands(self, physics_model: ksim.PhysicsModel) -> list[ksim.Command]:
@@ -484,7 +474,7 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
         return ZbotModel(key)
 
     def get_initial_carry(self, rng: PRNGKeyArray) -> Array:
-        return jnp.zeros(HISTORY_LENGTH * SINGLE_STEP_HISTORY_SIZE)
+        return jnp.zeros(0)
 
     def _run_actor(
         self,
@@ -576,43 +566,12 @@ class ZbotStandingTask(ksim.PPOTask[ZbotStandingTaskConfig], Generic[Config]):
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
         rng: PRNGKeyArray,
-    ) -> tuple[Array, Array, AuxOutputs]:
+    ) -> ksim.Action:
+        """Sample an action from the model."""
         action_dist_n = self._run_actor(model, observations, commands)
-        action_n = action_dist_n.sample(seed=rng)
-        action_log_prob_n = action_dist_n.log_prob(action_n)
+        action_n = action_dist_n.sample(seed=rng) * self.config.action_scale
 
-        critic_n = self._run_critic(model, observations, commands)
-        value_n = critic_n.squeeze(-1)
-
-        joint_pos_n = observations["joint_position_observation"]
-        joint_vel_n = observations["joint_velocity_observation"]
-        imu_acc_3 = observations["imu_acc_obs"]
-        imu_gyro_3 = observations["imu_gyro_obs"]
-        lin_vel_cmd_2 = commands["linear_velocity_step_command"]
-        last_action_n = observations["last_action_observation"]
-        history_n = jnp.concatenate(
-            [
-                joint_pos_n,
-                joint_vel_n,
-                imu_acc_3,
-                imu_gyro_3,
-                lin_vel_cmd_2,
-                last_action_n,
-                action_n,
-            ],
-            axis=-1,
-        )
-
-        if HISTORY_LENGTH > 0:
-            # Roll the history by shifting the existing history and adding the new data
-            carry_reshaped = carry.reshape(HISTORY_LENGTH, SINGLE_STEP_HISTORY_SIZE)
-            shifted_history = jnp.roll(carry_reshaped, shift=-1, axis=0)
-            new_history = shifted_history.at[HISTORY_LENGTH - 1].set(history_n)
-            history_n = new_history.reshape(-1)
-        else:
-            history_n = jnp.zeros(0)
-
-        return action_n, history_n, AuxOutputs(log_probs=action_log_prob_n, values=value_n)
+        return ksim.Action(action=action_n, carry=None, aux_outputs=None)
 
 
 if __name__ == "__main__":
