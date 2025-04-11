@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar, Optional
+import time
 
 import attrs
 import glm
@@ -28,11 +29,13 @@ import ksim
 from ksim.types import PhysicsModel
 from ksim.utils.reference_motion import (
     ReferenceMapping,
-    generate_reference_motion,
+    get_reference_cartesian_poses,
     get_local_xpos,
     get_reference_joint_id,
     visualize_reference_motion,
+    get_reference_qpos,
 )
+from ksim.viewer import GlfwMujocoViewer
 
 from ksim_zbot.zbot2.walking.walking import (
     ZbotWalkingTask,
@@ -81,6 +84,14 @@ class ZbotWalkingReferenceMotionTaskConfig(ZbotWalkingTaskConfig):
     visualize_reference_motion: bool = xax.field(
         value=False,
         help="Whether to visualize the reference motion.",
+    )
+    use_ik_visualization: bool = xax.field(
+        value=False,
+        help="Whether to use IK to make the robot follow the reference motion during visualization.",
+    )
+    constrained_joint_ids: tuple[int, ...] = xax.field(
+        value=(0, 1, 2, 3, 4, 5, 6),
+        help="IDs of joints that should be constrained during IK (typically the floating base).",
     )
 
 
@@ -137,6 +148,7 @@ class ZbotWalkingReferenceMotionTask(ZbotWalkingTask):
     reference_motion: Optional[xax.FrozenDict[int, xax.HashableArray]] = None
     tracked_body_ids: Optional[tuple[int, ...]] = None
     mj_base_id: Optional[int] = None
+    reference_qpos: Optional[np.ndarray] = None
 
     def get_rewards(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reward]:
         if self.reference_motion is None:
@@ -205,7 +217,7 @@ class ZbotWalkingReferenceMotionTask(ZbotWalkingTask):
         offset = np.array(self.config.reference_motion_offset)
         print(f"Applying offset to reference motion: {offset}")
 
-        np_reference_motion = generate_reference_motion(
+        np_reference_motion = get_reference_cartesian_poses(
             mappings=ZBOT_REFERENCE_MAPPINGS,
             model=mj_model,
             root=root,
@@ -215,7 +227,77 @@ class ZbotWalkingReferenceMotionTask(ZbotWalkingTask):
             offset=offset,
         )
         
+        # If we're using IK visualization, also compute the reference joint angles
+        if self.config.use_ik_visualization:
+            print("Computing IK solution for reference motion...")
+            try:
+                self.reference_qpos = get_reference_qpos(
+                    model=mj_model,
+                    mj_base_id=self.mj_base_id,
+                    bvh_root=root,
+                    bvh_to_mujoco_names=ZBOT_REFERENCE_MAPPINGS,
+                    bvh_base_id=reference_base_id,
+                    bvh_offset=offset,
+                    bvh_root_callback=rotation_callback,
+                    bvh_scaling_factor=self.config.bvh_scaling_factor,
+                    constrained_joint_ids=self.config.constrained_joint_ids,
+                    neutral_qpos=None,
+                    neutral_similarity_weight=0.1,
+                    temporal_consistency_weight=0.1,
+                    n_restarts=3,
+                    error_acceptance_threshold=1e-4,
+                    ftol=1e-8,
+                    xtol=1e-8,
+                    max_nfev=2000,
+                    verbose=True,
+                )
+                print(f"Successfully computed reference qpos with shape {self.reference_qpos.shape}")
+            except Exception as e:
+                print(f"Error computing reference qpos: {e}")
+                self.reference_qpos = None
+        
         return mj_model, np_reference_motion
+
+    def visualize_reference_motion_with_ik(self, model: mujoco.MjModel) -> None:
+        """Visualize the reference motion with the robot following it using precomputed IK."""
+        if self.reference_qpos is None:
+            print("No reference qpos available. Please ensure IK computation was successful.")
+            return
+        
+        print("Visualizing reference motion with IK...")
+        data = mujoco.MjData(model)
+        
+        # Use the GlfwMujocoViewer for better control
+        viewer = GlfwMujocoViewer(model, data, mode="window", width=1024, height=768)
+        
+        # Set some nice camera parameters
+        viewer.cam.distance = 3.0
+        viewer.cam.azimuth = 45.0
+        viewer.cam.elevation = -20.0
+        
+        # Total number of frames
+        total_frames = len(self.reference_qpos)
+        frame = 0
+        
+        # The main visualization loop
+        while viewer.is_alive:
+            frame = frame % total_frames
+            
+            # Update the pose using the precomputed reference qpos
+            data.qpos = self.reference_qpos[frame]
+            mujoco.mj_forward(model, data)
+            
+            # Advance time (controls playback speed)
+            data.time += model.opt.timestep
+            
+            # Render
+            viewer.render()
+            
+            # Move to next frame
+            frame += 1
+            
+            # Slow down playback slightly
+            time.sleep(0.03)
 
     def run(self) -> None:
         """Main entry point that handles both visualization and training."""
@@ -230,20 +312,25 @@ class ZbotWalkingReferenceMotionTask(ZbotWalkingTask):
 
         # Decide whether to visualize or train
         if self.config.visualize_reference_motion:
-            print("Visualizing reference motion...")
-            visualize_reference_motion(
-                mj_model,
-                base_id=self.mj_base_id,
-                reference_motion=np_reference_motion,
-            )
+            if self.config.use_ik_visualization and self.reference_qpos is not None:
+                self.visualize_reference_motion_with_ik(mj_model)
+            else:
+                print("Visualizing reference motion markers...")
+                visualize_reference_motion(
+                    mj_model,
+                    base_id=self.mj_base_id,
+                    reference_motion=np_reference_motion,
+                )
         else:
             print("Starting training...")
             super().run()
 
 
 if __name__ == "__main__":
-    # To run visualization:
-    #   python -m ksim_zbot.zbot2.walking.walking_reference_motion visualize_reference_motion=True
+    # To run visualization with IK:
+    #   python -m ksim_zbot.zbot2.walking.walking_reference_motion visualize_reference_motion=True use_ik_visualization=True
+    # To run visualization without IK:
+    #   python -m ksim_zbot.zbot2.walking.walking_reference_motion visualize_reference_motion=True use_ik_visualization=False
     # To run training:
     #   python -m ksim_zbot.zbot2.walking.walking_reference_motion visualize_reference_motion=False
     ZbotWalkingReferenceMotionTask.launch(
@@ -270,10 +357,11 @@ if __name__ == "__main__":
             bvh_path=str(Path(__file__).parent / "data" / "walk-relaxed_actorcore.bvh"),
             rotate_bvh_euler=(0, np.pi / 2, 0),
             bvh_scaling_factor=1 / 300,  # Scale down significantly for ZBot
-            reference_motion_offset=(0.0, 0.0, -0.11),  # Move down by 0.1 units
+            reference_motion_offset=(0.0, 0.0, -0.11),  # Move down by 0.11 units
             mj_base_name="floating_base_link",
             reference_base_name="CC_Base_Pelvis",
             visualize_reference_motion=True,  # Set to True by default for visualization
+            use_ik_visualization=True,  # Use IK visualization by default
             # ZBot specific parameters
             action_scale=1.0,
         ),
