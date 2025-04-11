@@ -26,6 +26,7 @@ DT = 0.02  # Policy time step (50Hz)
 COMMAND_X = 0.2
 COMMAND_Y = 0.0
 
+
 @dataclass
 class Actuator:
     actuator_id: int
@@ -253,7 +254,9 @@ async def main(
 
     prev_action = np.zeros(len(actuator_mapping))
 
-    observation = (await get_observation(kos, actuator_mapping, prev_action, np.array([COMMAND_X, COMMAND_Y]))).reshape(1, -1)
+    observation = (await get_observation(kos, actuator_mapping, prev_action, np.array([COMMAND_X, COMMAND_Y]))).reshape(
+        1, -1
+    )
 
     if no_render:
         await kos.process_manager.start_kclip("deployment")

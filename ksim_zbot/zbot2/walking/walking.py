@@ -271,9 +271,7 @@ class LinearVelocityTrackingReward(ksim.Reward):
         command = jnp.concatenate(
             [trajectory.command[self.command_name_x], trajectory.command[self.command_name_y]], axis=-1
         )
-        lin_vel_error = xax.get_norm(
-            command - trajectory.obs[self.linvel_obs_name][..., :2], self.norm
-        ).sum(axis=-1)
+        lin_vel_error = xax.get_norm(command - trajectory.obs[self.linvel_obs_name][..., :2], self.norm).sum(axis=-1)
         return jnp.exp(-lin_vel_error / self.error_scale), None
 
 
@@ -430,7 +428,7 @@ class ZbotActor(eqx.Module):
     ) -> distrax.Normal:
         # Split the output into mean and standard deviation.
         prediction_n = self.mlp(flat_obs_n)
-        
+
         mean_n = prediction_n[..., :NUM_OUTPUTS]
         std_n = prediction_n[..., NUM_OUTPUTS:]
 
@@ -439,7 +437,7 @@ class ZbotActor(eqx.Module):
 
         # Softplus and clip to ensure positive standard deviations.
         std_n = jnp.clip((jax.nn.softplus(std_n) + self.min_std) * self.var_scale, max=self.max_std)
-        
+
         # Return position-only distribution
         return distrax.Normal(mean_n, std_n)
 
@@ -675,9 +673,11 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
     ) -> tuple[ksim.PPOVariables, PyTree]:
         """Gets the variables required for computing PPO loss."""
         # Instead of manually flattening and reshaping, use vmap to handle the batch dimensions automatically
-        
+
         # Define a function to process a single timestep
-        def process_single_timestep(obs, cmd, action):
+        def process_single_timestep(
+            obs: FrozenDict[str, Array], cmd: FrozenDict[str, Array], action: Array
+        ) -> tuple[Array, Array]:
             # Extract observations and commands for a single timestep
             joint_pos_n = obs["dhjoint_position_observation"]
             joint_vel_n = obs["dhjoint_velocity_observation"]
@@ -687,29 +687,25 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
             lin_vel_cmd_y = cmd["linear_velocity_command_y"]
             lin_vel_cmd_2 = jnp.concatenate([lin_vel_cmd_x, lin_vel_cmd_y], axis=-1)
             last_action_n = obs["last_action_observation"]
-            
+
             # Concatenate inputs - this works on a single example, no batch dimension
-            flat_obs = jnp.concatenate([
-                joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n
-            ], axis=-1)
-            
+            flat_obs = jnp.concatenate(
+                [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n], axis=-1
+            )
+
             # Call models to get log probs and values
             action_dist = model.actor.call_flat_obs(flat_obs)
             log_prob = action_dist.log_prob(action)
             value = model.critic.call_flat_obs(flat_obs).squeeze(-1)
-            
+
             return log_prob, value
-        
+
         # Vectorize the processing function over the time dimension
         vmapped_process = jax.vmap(process_single_timestep)
-        
+
         # Apply the vectorized function to all timesteps
-        log_probs, values = vmapped_process(
-            trajectories.obs, 
-            trajectories.command, 
-            trajectories.action
-        )
-        
+        log_probs, values = vmapped_process(trajectories.obs, trajectories.command, trajectories.action)
+
         # Return PPO variables and model carry
         return ksim.PPOVariables(log_probs=log_probs, values=values), model_carry
 
