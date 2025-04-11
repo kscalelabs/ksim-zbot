@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 DT = 0.02  # Policy time step (50Hz)
 COMMAND_X = 0.2
-COMMAND_Y = 0.0
+COMMAND_Y = 0.01
 
 
 @dataclass
@@ -271,6 +271,7 @@ async def main(
 
     try:
         while time.time() < end_time:
+            # await asyncio.sleep(0.1)
             observation = observation.reshape(1, -1)
             # Model only outputs position commands
             action = np.array(model.infer(observation)).reshape(-1)
@@ -278,6 +279,9 @@ async def main(
             # action = np.zeros_like(action)
             # action[9] = -0.5
             # action[15] = 0.5
+            
+            
+            # action[[0, 1, 2, 3, 4, 5, 6]] = 0
 
             observation, _ = await asyncio.gather(
                 get_observation(kos, actuator_mapping, prev_action, np.array([COMMAND_X, COMMAND_Y])),
