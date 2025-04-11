@@ -66,6 +66,10 @@ class ZbotWalkingReferenceMotionTaskConfig(ZbotWalkingTaskConfig):
         value=1.0,
         help="Scaling factor to ensure the BVH tree matches the Mujoco model.",
     )
+    reference_motion_offset: tuple[float, float, float] = xax.field(
+        value=(0.0, 0.0, 0.0),
+        help="Offset to apply to the reference motion (x, y, z).",
+    )
     mj_base_name: str = xax.field(
         value="floating_base_link",
         help="The Mujoco body name of the base of the zbot",
@@ -197,6 +201,10 @@ class ZbotWalkingReferenceMotionTask(ZbotWalkingTask):
             quat = R.from_euler("xyz", euler_rotation).as_quat(scalar_first=True)
             root.applyRotation(glm.quat(*quat), bake=True)
 
+        # Convert offset tuple to numpy array
+        offset = np.array(self.config.reference_motion_offset)
+        print(f"Applying offset to reference motion: {offset}")
+
         np_reference_motion = generate_reference_motion(
             mappings=ZBOT_REFERENCE_MAPPINGS,
             model=mj_model,
@@ -204,6 +212,7 @@ class ZbotWalkingReferenceMotionTask(ZbotWalkingTask):
             reference_base_id=reference_base_id,
             root_callback=rotation_callback,
             scaling_factor=self.config.bvh_scaling_factor,
+            offset=offset,
         )
         
         return mj_model, np_reference_motion
@@ -260,7 +269,8 @@ if __name__ == "__main__":
             # Gait matching parameters.
             bvh_path=str(Path(__file__).parent / "data" / "walk-relaxed_actorcore.bvh"),
             rotate_bvh_euler=(0, np.pi / 2, 0),
-            bvh_scaling_factor=1 / 100,
+            bvh_scaling_factor=1 / 300,  # Scale down significantly for ZBot
+            reference_motion_offset=(0.0, 0.0, -0.11),  # Move down by 0.1 units
             mj_base_name="floating_base_link",
             reference_base_name="CC_Base_Pelvis",
             visualize_reference_motion=True,  # Set to True by default for visualization
