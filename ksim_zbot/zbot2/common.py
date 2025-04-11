@@ -15,7 +15,7 @@ import mujoco
 import xax
 from jaxtyping import Array, PRNGKeyArray
 from kscale.web.gen.api import JointMetadataOutput
-from ksim.actuators import Actuators, NoiseType
+from ksim.actuators import StatefulActuators, NoiseType
 from ksim.types import PhysicsData, PlannerState
 from mujoco import mjx
 from mujoco_scenes.mjcf import load_mjmodel
@@ -123,7 +123,7 @@ def load_actuator_params(params_path: str, actuator_type: str) -> FeetechParams:
         return json.load(f)
 
 
-class FeetechActuators(Actuators):
+class FeetechActuators(StatefulActuators):
     """Feetech actuator controller."""
 
     def __init__(
@@ -163,7 +163,13 @@ class FeetechActuators(Actuators):
         self.torque_noise = torque_noise
         self.torque_noise_type = torque_noise_type
 
-    def get_ctrl(self, planner_state: PlannerState, action_j: Array, physics_data: PhysicsData, rng: PRNGKeyArray) -> tuple[PlannerState, Array]:
+    def get_stateful_ctrl(
+        self,
+        action: Array,
+        physics_data: PhysicsData,
+        planner_state: PlannerState,
+        rng: PRNGKeyArray,
+    ) -> tuple[Array, PlannerState]:
         """Compute torque control with velocity smoothing and duty cycle clipping (JAX friendly)."""
         pos_rng, tor_rng = jax.random.split(rng)
 
@@ -172,7 +178,7 @@ class FeetechActuators(Actuators):
 
         planner_state, (desired_position, desired_velocity) = trapezoidal_step(
             planner_state,
-            action_j,
+            action,
             self.dt
         )
 
@@ -190,10 +196,14 @@ class FeetechActuators(Actuators):
         # Add noise to torque
         torque_j_noisy = self.add_noise(self.torque_noise, self.torque_noise_type, torque_j, tor_rng)
 
-        return planner_state, torque_j_noisy
+        return torque_j_noisy, planner_state
 
     def get_default_action(self, physics_data: PhysicsData) -> Array:
         return physics_data.qpos[7:]
+
+    def get_default_state(self, initial_position: Array, initial_velocity: Array) -> PlannerState:
+        """Initialize the planner state with the provided position and velocity."""
+        return PlannerState(position=initial_position, velocity=initial_velocity)
 
 
 ZbotModel = TypeVar("ZbotModel", bound=eqx.Module)

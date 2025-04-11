@@ -23,7 +23,8 @@ from ksim_zbot.zbot2.common import load_actuator_params
 logger = logging.getLogger(__name__)
 
 DT = 0.02  # Policy time step (50Hz)
-
+COMMAND_X = 0.2
+COMMAND_Y = 0.0
 
 @dataclass
 class Actuator:
@@ -79,7 +80,7 @@ def load_actuator_mapping(metadata_path: str | Path) -> dict:
 
 
 async def get_observation(
-    kos: pykos.KOS, actuator_mapping: dict, prev_action: np.ndarray, cmd: np.ndarray = np.array([0.15, 0.0])
+    kos: pykos.KOS, actuator_mapping: dict, prev_action: np.ndarray, cmd: np.ndarray
 ) -> np.ndarray:
     """Get observation using actuator mapping from metadata."""
     actuator_ids = list(actuator_mapping.keys())
@@ -252,7 +253,7 @@ async def main(
 
     prev_action = np.zeros(len(actuator_mapping))
 
-    observation = (await get_observation(kos, actuator_mapping, prev_action)).reshape(1, -1)
+    observation = (await get_observation(kos, actuator_mapping, prev_action, np.array([COMMAND_X, COMMAND_Y]))).reshape(1, -1)
 
     if no_render:
         await kos.process_manager.start_kclip("deployment")
@@ -261,7 +262,7 @@ async def main(
     model.infer(observation)
 
     target_time = time.time() + DT
-    observation = await get_observation(kos, actuator_mapping, prev_action)
+    observation = await get_observation(kos, actuator_mapping, prev_action, np.array([COMMAND_X, COMMAND_Y]))
 
     end_time = time.time() + episode_length
 
@@ -276,7 +277,7 @@ async def main(
             # action[15] = 0.5
 
             observation, _ = await asyncio.gather(
-                get_observation(kos, actuator_mapping, prev_action),
+                get_observation(kos, actuator_mapping, prev_action, np.array([COMMAND_X, COMMAND_Y])),
                 send_actions(kos, action, actuator_mapping),
             )
 
