@@ -337,11 +337,11 @@ ROOT CC_Base_BoneRoot
 						CHANNELS 3 Xrotation Yrotation Zrotation
 						JOINT CC_Base_L_Upperarm
 						{
-							OFFSET 12.748119 2.616885 -0.026810
+							OFFSET 22.748119 2.616885 -7.026810
 							CHANNELS 3 Xrotation Yrotation Zrotation
 							JOINT CC_Base_L_Forearm
 							{
-								OFFSET 30.707462 0.007299 -0.258804
+								OFFSET 22.707462 -13.007299 5.258804
 								CHANNELS 3 Xrotation Yrotation Zrotation
 								JOINT CC_Base_L_ForearmTwist01
 								{
@@ -368,7 +368,7 @@ ROOT CC_Base_BoneRoot
 								}
 								JOINT CC_Base_L_Hand
 								{
-									OFFSET 31.208935 0.000525 0.133942
+									OFFSET 20.208935 10.000525 0.133942
 									CHANNELS 3 Xrotation Yrotation Zrotation
 									JOINT CC_Base_L_Mid1
 									{
@@ -489,7 +489,7 @@ ROOT CC_Base_BoneRoot
 						CHANNELS 3 Xrotation Yrotation Zrotation
 						JOINT CC_Base_R_Upperarm
 						{
-							OFFSET -12.747458 2.620382 -0.027130
+							OFFSET -25.747458 2.620382 -7.027130
 							CHANNELS 3 Xrotation Yrotation Zrotation
 							JOINT CC_Base_R_UpperarmTwist01
 							{
@@ -507,7 +507,7 @@ ROOT CC_Base_BoneRoot
 							}
 							JOINT CC_Base_R_Forearm
 							{
-								OFFSET -30.707649 0.030312 -0.259460
+								OFFSET -25.707649 -5.030312 -0.259460
 								CHANNELS 3 Xrotation Yrotation Zrotation
 								JOINT CC_Base_R_ForearmTwist01
 								{
@@ -534,7 +534,7 @@ ROOT CC_Base_BoneRoot
 								}
 								JOINT CC_Base_R_Hand
 								{
-									OFFSET -31.209145 0.019975 0.132889
+									OFFSET -20.209145 0.019975 0.132889
 									CHANNELS 3 Xrotation Yrotation Zrotation
 									JOINT CC_Base_R_Mid1
 									{
