@@ -110,7 +110,6 @@ async def get_observation(
 
 async def send_actions(kos: pykos.KOS, position: np.ndarray, actuator_mapping: dict) -> None:
     """Send actions using actuator mapping from metadata."""
-    
     position = np.rad2deg(position)
     nn_id_to_actuator_id = list(actuator_mapping.items())
     actuator_commands: list[pykos.services.actuator.ActuatorCommand] = [
@@ -151,7 +150,7 @@ async def configure_actuators(
         params = load_actuator_params(actuator_params_path, actuator_type)
         max_torque = params["max_torque"]
 
-        logger.info(f"Configuring actuator {actuator_id} with kp={kp}, kd={kd}, max_torque={max_torque}")
+        logger.info("Configuring actuator %d with kp=%f, kd=%f, max_torque=%f", actuator_id, kp, kd, max_torque)
 
         # Configure the actuator through KOS API
         await kos.actuator.configure_actuator(
@@ -282,12 +281,11 @@ async def main(
             # action = np.zeros_like(action)
             # action[9] = -0.5
             # action[15] = 0.5
-            
-            
+
             # action[[0, 1, 2, 3, 4, 5, 6]] = 0
-            
+
             # action[12] = 0.0
-            
+
             # action = action / 10
 
             observation, _ = await asyncio.gather(

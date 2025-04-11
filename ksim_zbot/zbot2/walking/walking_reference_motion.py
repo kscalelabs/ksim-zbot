@@ -1,9 +1,9 @@
 """Walking Zbot task with reference gait tracking."""
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeVar, Optional
-import time
+from typing import Optional
 
 import attrs
 import glm
@@ -22,30 +22,28 @@ except ImportError as e:
     ) from e
 
 
-from jaxtyping import Array, PRNGKeyArray
-from scipy.spatial.transform import Rotation as R
-
 import ksim
+from jaxtyping import Array, PRNGKeyArray
 from ksim.types import PhysicsModel
 from ksim.utils.reference_motion import (
     ReferenceMapping,
-    get_reference_cartesian_poses,
     get_local_xpos,
+    get_reference_cartesian_poses,
     get_reference_joint_id,
-    visualize_reference_motion,
     get_reference_qpos,
+    visualize_reference_motion,
 )
 from ksim.viewer import GlfwMujocoViewer
+from scipy.spatial.transform import Rotation as R
 
 from ksim_zbot.zbot2.walking.walking import (
+    FeetContactPenalty,
+    JointDeviationPenalty,
+    LinearVelocityTrackingReward,
+    TerminationPenalty,
+    ZbotModel,
     ZbotWalkingTask,
     ZbotWalkingTaskConfig,
-    ZbotModel,
-    LinearVelocityTrackingReward,
-    AngularVelocityTrackingReward,
-    JointDeviationPenalty,
-    TerminationPenalty,
-    FeetContactPenalty
 )
 
 
@@ -102,17 +100,14 @@ ZBOT_REFERENCE_MAPPINGS = (
     ReferenceMapping("CC_Base_L_ThighTwist01", "Left_Hip_Roll_STS3250"),  # hip
     ReferenceMapping("CC_Base_L_CalfTwist01", "Left_Knee_Pitch_STS3250"),  # knee
     ReferenceMapping("CC_Base_L_Foot", "Left_Foot"),  # foot
-    
     # Right leg
     ReferenceMapping("CC_Base_R_ThighTwist01", "Right_Hip_Roll_STS3250"),  # hip
     ReferenceMapping("CC_Base_R_CalfTwist01", "Right_Knee_Pitch_STS3250"),  # knee
     ReferenceMapping("CC_Base_R_Foot", "Right_Foot"),  # foot
-    
     # Left arm
     ReferenceMapping("CC_Base_L_UpperarmTwist01", "Left_Shoulder_Roll_STS3250"),  # shoulder
     ReferenceMapping("CC_Base_L_ForearmTwist01", "R_ARM_MIRROR_1"),  # elbow
     ReferenceMapping("CC_Base_L_Hand", "Left_Finger"),  # hand
-    
     # Right arm
     ReferenceMapping("CC_Base_R_UpperarmTwist01", "Right_Shoulder_Roll_STS3250"),  # shoulder
     ReferenceMapping("CC_Base_R_ForearmTwist01", "L_ARM_MIRROR_1"),  # elbow
@@ -154,7 +149,7 @@ class ZbotWalkingReferenceMotionTask(ZbotWalkingTask):
         if self.reference_motion is None:
             # If we're just setting up the task, return base rewards
             return super().get_rewards(physics_model)
-        
+
         rewards = [
             ksim.BaseHeightRangeReward(z_lower=0.2, z_upper=0.5, dropoff=10.0, scale=0.5),
             ksim.LinearVelocityPenalty(index="z", scale=-0.01),
@@ -185,7 +180,7 @@ class ZbotWalkingReferenceMotionTask(ZbotWalkingTask):
         action_n = super().sample_action(model, model_carry, physics_model, physics_state, observations, commands, rng)
 
         # Only track positions if we have initialized the reference motion
-        if hasattr(self, 'tracked_body_ids') and self.tracked_body_ids is not None:
+        if hasattr(self, "tracked_body_ids") and self.tracked_body_ids is not None:
             # Getting the local cartesian positions for all tracked bodies.
             tracked_positions: dict[int, Array] = {}
             for body_id in self.tracked_body_ids:
@@ -198,7 +193,7 @@ class ZbotWalkingReferenceMotionTask(ZbotWalkingTask):
                     tracked_pos=xax.FrozenDict(tracked_positions),
                 ),
             )
-        
+
         return action_n
 
     def setup_reference_motion(self) -> tuple[PhysicsModel, xax.FrozenDict[int, np.ndarray]]:
@@ -226,7 +221,7 @@ class ZbotWalkingReferenceMotionTask(ZbotWalkingTask):
             scaling_factor=self.config.bvh_scaling_factor,
             offset=offset,
         )
-        
+
         # If we're using IK visualization, also compute the reference joint angles
         if self.config.use_ik_visualization:
             print("Computing IK solution for reference motion...")
@@ -255,7 +250,7 @@ class ZbotWalkingReferenceMotionTask(ZbotWalkingTask):
             except Exception as e:
                 print(f"Error computing reference qpos: {e}")
                 self.reference_qpos = None
-        
+
         return mj_model, np_reference_motion
 
     def visualize_reference_motion_with_ik(self, model: mujoco.MjModel) -> None:
@@ -263,39 +258,39 @@ class ZbotWalkingReferenceMotionTask(ZbotWalkingTask):
         if self.reference_qpos is None:
             print("No reference qpos available. Please ensure IK computation was successful.")
             return
-        
+
         print("Visualizing reference motion with IK...")
         data = mujoco.MjData(model)
-        
+
         # Use the GlfwMujocoViewer for better control
         viewer = GlfwMujocoViewer(model, data, mode="window", width=1024, height=768)
-        
+
         # Set some nice camera parameters
         viewer.cam.distance = 3.0
         viewer.cam.azimuth = 45.0
         viewer.cam.elevation = -20.0
-        
+
         # Total number of frames
         total_frames = len(self.reference_qpos)
         frame = 0
-        
+
         # The main visualization loop
         while viewer.is_alive:
             frame = frame % total_frames
-            
+
             # Update the pose using the precomputed reference qpos
             data.qpos = self.reference_qpos[frame]
             mujoco.mj_forward(model, data)
-            
+
             # Advance time (controls playback speed)
             data.time += model.opt.timestep
-            
+
             # Render
             viewer.render()
-            
+
             # Move to next frame
             frame += 1
-            
+
             # Slow down playback slightly
             time.sleep(0.03)
 
@@ -303,11 +298,9 @@ class ZbotWalkingReferenceMotionTask(ZbotWalkingTask):
         """Main entry point that handles both visualization and training."""
         # Setup reference motion data
         mj_model, np_reference_motion = self.setup_reference_motion()
-        
+
         # Convert to JAX types for training
-        self.reference_motion = jax.tree.map(
-            lambda x: xax.hashable_array(jnp.array(x)), np_reference_motion
-        )
+        self.reference_motion = jax.tree.map(lambda x: xax.hashable_array(jnp.array(x)), np_reference_motion)
         self.tracked_body_ids = tuple(self.reference_motion.keys())
 
         # Decide whether to visualize or train
@@ -327,10 +320,9 @@ class ZbotWalkingReferenceMotionTask(ZbotWalkingTask):
 
 
 if __name__ == "__main__":
-    # To run visualization with IK:
-    #   python -m ksim_zbot.zbot2.walking.walking_reference_motion visualize_reference_motion=True use_ik_visualization=True
-    # To run visualization without IK:
-    #   python -m ksim_zbot.zbot2.walking.walking_reference_motion visualize_reference_motion=True use_ik_visualization=False
+    # To run visualization:
+    #   python -m ksim_zbot.zbot2.walking.walking_reference_motion visualize_reference_motion=True
+    #   python -m ksim_zbot.zbot2.walking.walking_reference_motion use_ik_visualization=True
     # To run training:
     #   python -m ksim_zbot.zbot2.walking.walking_reference_motion visualize_reference_motion=False
     ZbotWalkingReferenceMotionTask.launch(

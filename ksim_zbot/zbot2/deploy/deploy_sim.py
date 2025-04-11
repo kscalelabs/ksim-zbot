@@ -279,8 +279,7 @@ async def main(
             # action = np.zeros_like(action)
             # action[9] = -0.5
             # action[15] = 0.5
-            
-            
+
             # action[[0, 1, 2, 3, 4, 5, 6]] = 0
 
             observation, _ = await asyncio.gather(
