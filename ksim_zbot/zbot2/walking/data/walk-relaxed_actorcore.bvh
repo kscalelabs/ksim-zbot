@@ -17,11 +17,11 @@ ROOT CC_Base_BoneRoot
 				CHANNELS 3 Xrotation Yrotation Zrotation
 				JOINT CC_Base_L_Calf
 				{
-					OFFSET -0.939750 -0.172164 -40.658329
+					OFFSET 2.939750 -0.172164 -30.658329
 					CHANNELS 3 Xrotation Yrotation Zrotation
 					JOINT CC_Base_L_Foot
 					{
-						OFFSET -0.952431 0.632389 -42.310875
+						OFFSET 2.952431 0.632389 -30.310875
 						CHANNELS 3 Xrotation Yrotation Zrotation
 						JOINT CC_Base_L_ToeBaseShareBone
 						{
@@ -142,11 +142,11 @@ ROOT CC_Base_BoneRoot
 				}
 				JOINT CC_Base_R_Calf
 				{
-					OFFSET 0.937987 -0.190387 -40.658482
+					OFFSET -5.937987 -0.190387 -30.658482
 					CHANNELS 3 Xrotation Yrotation Zrotation
 					JOINT CC_Base_R_Foot
 					{
-						OFFSET 0.950368 0.643215 -42.311081
+						OFFSET -2.950368 0.643215 -30.311081
 						CHANNELS 3 Xrotation Yrotation Zrotation
 						JOINT CC_Base_R_ToeBase
 						{
