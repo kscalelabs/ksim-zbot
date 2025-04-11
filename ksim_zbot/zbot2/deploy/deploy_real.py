@@ -18,12 +18,13 @@ import numpy as np
 import pykos
 import tensorflow as tf
 
+from ksim_zbot.zbot2.common import load_actuator_params
+
 logger = logging.getLogger(__name__)
 
-step_counter = 0
-ip = None  # Global IP variable
-
 DT = 0.02  # Policy time step (50Hz)
+COMMAND_X = 0.2
+COMMAND_Y = 0.01
 
 
 @dataclass
@@ -80,7 +81,7 @@ def load_actuator_mapping(metadata_path: str | Path) -> dict:
 
 
 async def get_observation(
-    kos: pykos.KOS, actuator_mapping: dict, prev_action: np.ndarray, cmd: np.ndarray = np.array([0.15, 0.0])
+    kos: pykos.KOS, actuator_mapping: dict, prev_action: np.ndarray, cmd: np.ndarray
 ) -> np.ndarray:
     """Get observation using actuator mapping from metadata."""
     actuator_ids = list(actuator_mapping.keys())
@@ -89,15 +90,6 @@ async def get_observation(
         kos.actuator.get_actuators_state(actuator_ids),
         kos.imu.get_imu_values(),
     )
-
-    # Convert gyro values from degrees to radians
-    if ip == "192.168.42.1":
-        imu.gyro_x = np.deg2rad(imu.gyro_x)
-        imu.gyro_y = np.deg2rad(imu.gyro_y)
-        imu.gyro_z = np.deg2rad(imu.gyro_z)
-
-    gravity_bias = 9.81
-    imu.accel_z = imu.accel_z + gravity_bias
 
     nn_id_to_actuator_id = list(actuator_mapping.items())
 
@@ -110,9 +102,6 @@ async def get_observation(
 
     imu_obs = np.array([imu.accel_x, imu.accel_y, imu.accel_z, imu.gyro_x, imu.gyro_y, imu.gyro_z])
 
-    print(f"imu accel x: {imu.accel_x}, imu accel y: {imu.accel_y}, imu accel z: {imu.accel_z}")
-    print(f"imu gyro x: {imu.gyro_x}, imu gyro y: {imu.gyro_y}, imu gyro z: {imu.gyro_z}")
-
     last_action = prev_action  # Add last action to observation
 
     observation = np.concatenate([pos_obs, vel_obs, imu_obs, cmd, last_action], axis=-1)
@@ -121,7 +110,7 @@ async def get_observation(
 
 async def send_actions(kos: pykos.KOS, position: np.ndarray, actuator_mapping: dict) -> None:
     """Send actions using actuator mapping from metadata."""
-    # Convert position to degrees and create actuator commands
+    
     position = np.rad2deg(position)
     nn_id_to_actuator_id = list(actuator_mapping.items())
     actuator_commands: list[pykos.services.actuator.ActuatorCommand] = [
@@ -131,30 +120,7 @@ async def send_actions(kos: pykos.KOS, position: np.ndarray, actuator_mapping: d
         }
         for actuator_id, mapping in nn_id_to_actuator_id
     ]
-    logger.info(" actuator commands: %s", actuator_commands)
     await kos.actuator.command_actuators(actuator_commands)
-
-
-def load_feetech_params(actuator_params_path: str) -> tuple[dict, dict]:
-    """Load Feetech parameters from files."""
-    params_path = Path(actuator_params_path)
-    params_file_3215 = params_path / "sts3215_12v_params.json"
-    params_file_3250 = params_path / "sts3250_params.json"
-
-    if not params_file_3215.exists():
-        raise ValueError(
-            f"Feetech parameters file '{params_file_3215}' not found. Please ensure it exists in '{params_path}'."
-        )
-    if not params_file_3250.exists():
-        raise ValueError(
-            f"Feetech parameters file '{params_file_3250}' not found. Please ensure it exists in '{params_path}'."
-        )
-
-    with open(params_file_3215, "r") as f:
-        params_3215 = json.load(f)
-    with open(params_file_3250, "r") as f:
-        params_3250 = json.load(f)
-    return params_3215, params_3250
 
 
 async def configure_actuators(
@@ -162,7 +128,6 @@ async def configure_actuators(
 ) -> None:
     """Configure actuators using parameters from files."""
     # Load the Feetech parameters
-    sts3215_params, sts3250_params = load_feetech_params(actuator_params_path)
 
     if metadata_path:
         metadata_file = Path(metadata_path)
@@ -179,25 +144,14 @@ async def configure_actuators(
 
     # Configure each actuator from metadata
     for joint_name, joint_info in joint_metadata.items():
-        try:
-            actuator_id = int(joint_info["id"])
-            actuator_type = joint_info.get("actuator_type", "")
-            kp = float(joint_info["kp"])
-            kd = float(joint_info["kd"])
-        except (KeyError, ValueError) as e:
-            logger.error("Invalid metadata for joint %s: %s for joint %s", joint_name, e, joint_info)
-            raise e
+        actuator_id = int(joint_info["id"])
+        actuator_type = joint_info.get("actuator_type", "")
+        kp = float(joint_info["kp"])
+        kd = float(joint_info["kd"])
+        params = load_actuator_params(actuator_params_path, actuator_type)
+        max_torque = params["max_torque"]
 
-        # Determine max_torque based on actuator type
-        if "feetech-sts3215" in actuator_type:
-            max_torque = sts3215_params["max_torque"]
-        elif "feetech-sts3250" in actuator_type:
-            max_torque = sts3250_params["max_torque"]
-        else:
-            logger.error("Unknown actuator type %s for joint %s", actuator_type, joint_name)
-            raise ValueError(f"Unknown actuator type {actuator_type} for joint {joint_name}")
-
-        print(f"configure actuator_id: {actuator_id}, kp: {kp}, kd: {kd}, max_torque: {max_torque}")
+        logger.info(f"Configuring actuator {actuator_id} with kp={kp}, kd={kd}, max_torque={max_torque}")
 
         # Configure the actuator through KOS API
         await kos.actuator.configure_actuator(
@@ -205,8 +159,7 @@ async def configure_actuators(
             kp=kp,
             kd=kd,
             torque_enabled=True,
-            # max_torque=max_torque,
-            acceleration=750,
+            max_torque=max_torque,
         )
 
 
@@ -270,7 +223,6 @@ async def main(
         # await kos.sim.get_parameters()
         logger.info("Connected to existing KOS-Sim instance.")
     except Exception as e:
-        raise e
         logger.info("Could not connect to existing KOS-Sim: %s", e)
         logger.info("Starting a new KOS-Sim instance locally...")
         sim_process, cleanup_fn = spawn_kos_sim(no_render)
@@ -305,7 +257,9 @@ async def main(
 
     prev_action = np.zeros(len(actuator_mapping))
 
-    observation = (await get_observation(kos, actuator_mapping, prev_action)).reshape(1, -1)
+    observation = (await get_observation(kos, actuator_mapping, prev_action, np.array([COMMAND_X, COMMAND_Y]))).reshape(
+        1, -1
+    )
 
     if no_render:
         await kos.process_manager.start_kclip("deployment")
@@ -314,27 +268,30 @@ async def main(
     model.infer(observation)
 
     target_time = time.time() + DT
-    observation = await get_observation(kos, actuator_mapping, prev_action)
+    observation = await get_observation(kos, actuator_mapping, prev_action, np.array([COMMAND_X, COMMAND_Y]))
 
     end_time = time.time() + episode_length
 
-    # send zero position command to all actuators
-    logger.info("Sending zero position command to all actuators...")
-    zero_action = np.zeros(len(actuator_mapping))  # This is in radians
-    await send_actions(kos, zero_action, actuator_mapping)
-    logger.info("Waiting for actuators to reach zero position...")
-    await asyncio.sleep(1.0)  # Give time for actuators to reach zero position
-
     try:
         while time.time() < end_time:
+            await asyncio.sleep(0.1)
             observation = observation.reshape(1, -1)
             # Model only outputs position commands
             action = np.array(model.infer(observation)).reshape(-1)
 
-            action = action / 2.0
+            # action = np.zeros_like(action)
+            # action[9] = -0.5
+            # action[15] = 0.5
+            
+            
+            # action[[0, 1, 2, 3, 4, 5, 6]] = 0
+            
+            # action[12] = 0.0
+            
+            # action = action / 10
 
             observation, _ = await asyncio.gather(
-                get_observation(kos, actuator_mapping, prev_action),
+                get_observation(kos, actuator_mapping, prev_action, np.array([COMMAND_X, COMMAND_Y])),
                 send_actions(kos, action, actuator_mapping),
             )
 
@@ -372,7 +329,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--debug", action="store_true")
-    parser.add_argument("--ip", type=str, default="localhost")
+    parser.add_argument("--ip", type=str, default="192.168.42.1")
     parser.add_argument("--episode_length", type=int, default=5)  # seconds
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--log-file", type=str, help="Path to write log output")
@@ -387,7 +344,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--actuator_params_path",
         type=str,
-        default="ksim_zbot/kscale-assets/actuators/feetech/",
+        default="ksim_zbot/kscale-assets/actuators/",
         help="The path to the assets directory for feetech actuator models",
     )
     parser.add_argument(
@@ -419,8 +376,6 @@ if __name__ == "__main__":
     logger.info("Metadata path: %s", args.metadata_path)
     logger.info("IP: %s", args.ip)
     logger.info("Debug: %s", args.debug)
-
-    ip = args.ip  # Update global IP variable
 
     asyncio.run(
         main(
