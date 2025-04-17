@@ -2,7 +2,7 @@
 
 import logging
 from dataclasses import dataclass
-from typing import Self
+from typing import Self, Collection
 
 import attrs
 import distrax
@@ -19,6 +19,14 @@ from ksim.observation import ContactObservation, ObservationState
 from ksim.types import PhysicsState, Trajectory
 from ksim.utils.mujoco import get_qpos_data_idxs_by_name
 from xax.utils.types.frozen_dict import FrozenDict
+from jax.scipy.spatial.transform import Rotation
+
+from ksim.utils.mujoco import (
+    get_sensor_data_idxs_by_name,
+    get_site_data_idx_from_name,
+    slice_update,
+    update_data_field,
+)
 
 from ksim_zbot.zbot2.common import ZbotTask, ZbotTaskConfig
 
@@ -37,13 +45,12 @@ SINGLE_STEP_HISTORY_SIZE = 0
 # imu_acc_3: 3
 # imu_gyro_3: 3
 # last_action_n: 20
-OBS_SIZE = 20 + 20 + 3 + 3 + 20  # = 66
+OBS_SIZE = 4 + 20 + 20 + 3 + 3 + 20  # = 70
 # Command size:
 # lin_vel_cmd_2: 2
-CMD_SIZE = 2
-NUM_INPUTS = OBS_SIZE + CMD_SIZE
-# Final Input Size:
-NUM_INPUTS = OBS_SIZE + CMD_SIZE
+CMD_SIZE = 2 + 1+ 1
+NUM_INPUTS = OBS_SIZE + CMD_SIZE # 70 + 4 = 74
+NUM_CRITIC_INPUTS = NUM_INPUTS + 2 + 2 + 6 + 3+ 3+4+3+3+20+1 # = 121
 # NUM_INPUTS = 66 + 2 = 68
 NUM_OUTPUTS = 20
 
@@ -58,39 +65,61 @@ class LinearVelocityCommand(ksim.Command):
     any command.
     """
 
-    range: tuple[float, float] = attrs.field()
-    index: int | str | None = attrs.field(default=None)
-    zero_prob: float = attrs.field(default=0.0)
+    x_range: tuple[float, float] = attrs.field()
+    y_range: tuple[float, float] = attrs.field()
+    x_zero_prob: float = attrs.field(default=0.0)
+    y_zero_prob: float = attrs.field(default=0.0)
     switch_prob: float = attrs.field(default=0.0)
     vis_height: float = attrs.field(default=1.0)
     vis_scale: float = attrs.field(default=0.05)
 
-    def initial_command(
-        self,
-        physics_data: ksim.PhysicsData,
-        curriculum_level: Array,
-        rng: PRNGKeyArray,
-    ) -> Array:
-        rng, rng_zero = jax.random.split(rng)
-        minval, maxval = self.range
-        value = jax.random.uniform(rng, (1,), minval=minval, maxval=maxval)
-        zero_mask = jax.random.bernoulli(rng_zero, self.zero_prob)
-        return jnp.where(zero_mask, 0.0, value)
+    def initial_command(self, physics_data: ksim.PhysicsData, curriculum_level: Array, rng: PRNGKeyArray) -> Array:
+        rng_x, rng_y, rng_zero_x, rng_zero_y = jax.random.split(rng, 4)
+        (xmin, xmax), (ymin, ymax) = self.x_range, self.y_range
+        x = jax.random.uniform(rng_x, (1,), minval=xmin, maxval=xmax)
+        y = jax.random.uniform(rng_y, (1,), minval=ymin, maxval=ymax)
+        x_zero_mask = jax.random.bernoulli(rng_zero_x, self.x_zero_prob)
+        y_zero_mask = jax.random.bernoulli(rng_zero_y, self.y_zero_prob)
+        return jnp.concatenate(
+            [
+                jnp.where(x_zero_mask, 0.0, x),
+                jnp.where(y_zero_mask, 0.0, y),
+            ]
+        )
 
     def __call__(
-        self,
-        prev_command: Array,
-        physics_data: ksim.PhysicsData,
-        curriculum_level: Array,
-        rng: PRNGKeyArray,
+        self, prev_command: Array, physics_data: ksim.PhysicsData, curriculum_level: Array, rng: PRNGKeyArray
     ) -> Array:
         rng_a, rng_b = jax.random.split(rng)
         switch_mask = jax.random.bernoulli(rng_a, self.switch_prob)
         new_commands = self.initial_command(physics_data, curriculum_level, rng_b)
         return jnp.where(switch_mask, new_commands, prev_command)
 
-    def get_name(self) -> str:
-        return f"{super().get_name()}{'' if self.index is None else f'_{self.index}'}"
+    def get_markers(self) -> Collection[ksim.vis.Marker]:
+        return []
+    
+@attrs.define(frozen=True)
+class AngularVelocityCommand(ksim.Command):
+    """Command to turn the robot."""
+
+    scale: float = attrs.field()
+    zero_prob: float = attrs.field(default=0.0)
+    switch_prob: float = attrs.field(default=0.0)
+
+    def initial_command(self, physics_data: ksim.PhysicsData, curriculum_level: Array, rng: PRNGKeyArray) -> Array:
+        """Returns (1,) array with angular velocity."""
+        rng_a, rng_b = jax.random.split(rng)
+        zero_mask = jax.random.bernoulli(rng_a, self.zero_prob)
+        cmd = jax.random.uniform(rng_b, (1,), minval=-self.scale, maxval=self.scale)
+        return jnp.where(zero_mask, jnp.zeros_like(cmd), cmd)
+
+    def __call__(
+        self, prev_command: Array, physics_data: ksim.PhysicsData, curriculum_level: Array, rng: PRNGKeyArray
+    ) -> Array:
+        rng_a, rng_b = jax.random.split(rng)
+        switch_mask = jax.random.bernoulli(rng_a, self.switch_prob)
+        new_commands = self.initial_command(physics_data, curriculum_level, rng_b)
+        return jnp.where(switch_mask, new_commands, prev_command)
 
 
 @attrs.define(frozen=True)
@@ -128,8 +157,57 @@ class AngularVelocityCommand(ksim.Command):
 
     def get_name(self) -> str:
         return f"{super().get_name()}{'' if self.index is None else f'_{self.index}'}"
+    
 
+@attrs.define(frozen=True)
+class GaitFrequencyCommand(ksim.Command):
+    """Command to set the gait frequency of the robot."""
 
+    gait_freq_lower: float = attrs.field(default=1.2)
+    gait_freq_upper: float = attrs.field(default=1.5)
+
+    def initial_command(
+        self,
+        physics_data: ksim.PhysicsData,
+        curriculum_level: Array,
+        rng: PRNGKeyArray,
+    ) -> Array:
+        """Returns (1,) array with gait frequency."""
+        return jax.random.uniform(rng, (1,), minval=self.gait_freq_lower, maxval=self.gait_freq_upper)
+
+    def __call__(
+        self,
+        prev_command: Array,
+        physics_data: ksim.PhysicsData,
+        curriculum_level: Array,
+        rng: PRNGKeyArray,
+    ) -> Array:
+        return prev_command
+    
+@attrs.define(frozen=True)
+class JointPositionObservation(ksim.Observation):
+    default_targets: tuple[float, ...] = attrs.field(default=(0.0,) * NUM_OUTPUTS)
+    noise: float = attrs.field(default=0.0)
+
+    def observe(self, state: ksim.ObservationState, rng: PRNGKeyArray) -> Array:
+        qpos = state.physics_state.data.qpos[7:]  # (N,)
+        diff = qpos - jnp.array(self.default_targets)
+        return diff
+
+@attrs.define(frozen=True)
+class ProjectedGravityObservation(ksim.Observation):
+    noise: float = attrs.field(default=0.0)
+
+    def observe(self, state: ksim.ObservationState, rng: PRNGKeyArray) -> Array:
+        gvec = xax.get_projected_gravity_vector_from_quat(state.physics_state.data.qpos[3:7])
+        return gvec
+
+@attrs.define(frozen=True)
+class TrueHeightObservation(ksim.Observation):
+    """Observation of the true height of the body."""
+
+    def observe(self, state: ksim.ObservationState, rng: PRNGKeyArray) -> Array:
+        return jnp.atleast_1d(state.physics_state.data.qpos[2])
 @attrs.define(frozen=True)
 class HistoryObservation(ksim.Observation):
     def observe(self, state: ObservationState, rng: PRNGKeyArray) -> Array:
@@ -146,10 +224,44 @@ class LastActionObservation(ksim.Observation):
     def add_noise(self, observation: Array, curriculum_level: Array, rng: PRNGKeyArray) -> Array:
         return observation + jax.random.normal(rng, observation.shape) * self.noise
 
+@attrs.define(frozen=True, kw_only=True)
+class TimestepPhaseObservation(ksim.TimestepObservation):
+    """Observation of the phase of the timestep."""
+
+    ctrl_dt: float = attrs.field(default=0.02)
+
+    def observe(self, state: ksim.ObservationState, rng: PRNGKeyArray) -> Array:
+        gait_freq = state.commands["gait_frequency_command"]
+        timestep = super().observe(state, rng)
+        steps = timestep / self.ctrl_dt
+        phase_dt = 2 * jnp.pi * gait_freq * self.ctrl_dt
+        start_phase = jnp.array([0, jnp.pi])  # trotting gait
+        phase = start_phase + steps * phase_dt
+        phase = jnp.fmod(phase + jnp.pi, 2 * jnp.pi) - jnp.pi
+
+        return jnp.array([jnp.cos(phase), jnp.sin(phase)]).flatten()
+    
 
 class NaiveVelocityReward(ksim.Reward):
     def __call__(self, trajectory: ksim.Trajectory, reward_carry: PyTree) -> tuple[Array, PyTree]:
         return trajectory.qvel[..., 0].clip(max=5.0), None
+
+@attrs.define(frozen=True, kw_only=True)
+class OrientationPenalty(ksim.Reward):
+    """Penalizes deviation from upright orientation using the upvector approach.
+
+    Rotates a unit up vector [0,0,1] by the current quaternion
+    and penalizes any x,y components, which should be zero if perfectly upright.
+    """
+
+    scale: float = attrs.field()
+
+    def __call__(self, trajectory: ksim.Trajectory, reward_carry: xax.FrozenDict[str, PyTree]) -> tuple[Array, None]:
+        quat = trajectory.qpos[..., 3:7]
+        up = jnp.array([0.0, 0.0, 1.0])
+        rot_up = Rotation(quat).apply(up)
+        orientation_penalty = jnp.sum(jnp.square(rot_up[..., :2]), axis=-1)
+        return orientation_penalty, None
 
 
 @attrs.define(frozen=True, kw_only=True)
@@ -374,6 +486,164 @@ class TerminationPenalty(ksim.Reward):
 
     def __call__(self, trajectory: ksim.Trajectory, reward_carry: PyTree) -> tuple[Array, PyTree]:
         return trajectory.done, None
+    
+@attrs.define(frozen=True, kw_only=True)
+class XYPushEvent(ksim.Event):
+    """Randomly push the robot after some interval."""
+
+    interval_range: tuple[float, float] = attrs.field()
+    force_range: tuple[float, float] = attrs.field()
+    curriculum_scale: float = attrs.field(default=1.0)
+
+    def __call__(
+        self,
+        model: ksim.PhysicsModel,
+        data: ksim.PhysicsData,
+        event_state: Array,
+        curriculum_level: Array,
+        rng: PRNGKeyArray,
+    ) -> tuple[ksim.PhysicsData, Array]:
+        # Decrement by physics timestep.
+        dt = jnp.float32(model.opt.timestep)
+        time_remaining = event_state - dt
+
+        # Update the data if the time remaining is less than 0.
+        updated_data, time_remaining = jax.lax.cond(
+            time_remaining <= 0.0,
+            lambda: self._apply_random_force(data, curriculum_level, rng),
+            lambda: (data, time_remaining),
+        )
+
+        return updated_data, time_remaining
+
+    def _apply_random_force(
+        self, data: ksim.PhysicsData, curriculum_level: Array, rng: PRNGKeyArray
+    ) -> tuple[ksim.PhysicsData, Array]:
+        push_theta = jax.random.uniform(rng, maxval=2 * jnp.pi)
+        push_magnitude = (
+            jax.random.uniform(
+                rng,
+                minval=self.force_range[0],
+                maxval=self.force_range[1],
+            )
+            * curriculum_level
+            * self.curriculum_scale
+        )
+        push = jnp.array([jnp.cos(push_theta), jnp.sin(push_theta)])
+        random_forces = push * push_magnitude + data.qvel[:2]
+        new_qvel = slice_update(data, "qvel", slice(0, 2), random_forces)
+        updated_data = update_data_field(data, "qvel", new_qvel)
+
+        # Chooses a new remaining interval.
+        minval, maxval = self.interval_range
+        time_remaining = jax.random.uniform(rng, (), minval=minval, maxval=maxval)
+
+        return updated_data, time_remaining
+
+    def get_initial_event_state(self, rng: PRNGKeyArray) -> Array:
+        minval, maxval = self.interval_range
+        return jax.random.uniform(rng, (), minval=minval, maxval=maxval)
+
+
+@attrs.define(frozen=True, kw_only=True)
+class TorquePushEvent(ksim.Event):
+    """Randomly push the robot with torque (angular velocity) after some interval."""
+
+    interval_range: tuple[float, float] = attrs.field()
+    ang_vel_range: tuple[float, float] = attrs.field()  # Min/max push angular velocity per axis
+    curriculum_scale: float = attrs.field(default=1.0)
+
+    def __call__(
+        self,
+        model: ksim.PhysicsModel,
+        data: ksim.PhysicsData,
+        event_state: Array,
+        curriculum_level: Array,
+        rng: PRNGKeyArray,
+    ) -> tuple[ksim.PhysicsData, Array]:
+        dt = jnp.float32(model.opt.timestep)
+        time_remaining = event_state - dt
+
+        # Update the data if the time remaining is less than 0.
+        updated_data, time_remaining = jax.lax.cond(
+            time_remaining <= 0.0,
+            lambda: self._apply_random_angular_velocity_push(data, curriculum_level, rng),
+            lambda: (data, time_remaining),
+        )
+
+        return updated_data, time_remaining
+
+    def _apply_random_angular_velocity_push(
+        self, data: ksim.PhysicsData, curriculum_level: Array, rng: PRNGKeyArray
+    ) -> tuple[ksim.PhysicsData, Array]:
+        """Applies a random angular velocity push to the root body."""
+        rng_push, rng_interval = jax.random.split(rng)
+
+        # Sample angular velocity push components
+        min_ang_vel, max_ang_vel = self.ang_vel_range
+        push_ang_vel = jax.random.uniform(
+            rng_push,
+            shape=(3,),  # Angular velocity is 3D (wx, wy, wz)
+            minval=min_ang_vel,
+            maxval=max_ang_vel,
+        )
+        scaled_push_ang_vel = push_ang_vel * curriculum_level * self.curriculum_scale
+
+        # Apply the push to angular velocity (qvel indices 3:6 for free joint)
+        ang_vel_indices = slice(3, 6)
+
+        # Add the push to the current angular velocity
+        current_ang_vel = data.qvel[ang_vel_indices]
+        new_ang_vel_val = current_ang_vel + scaled_push_ang_vel
+        new_qvel = slice_update(data, "qvel", ang_vel_indices, new_ang_vel_val)
+        updated_data = update_data_field(data, "qvel", new_qvel)
+
+        minval_interval, maxval_interval = self.interval_range
+        time_remaining = jax.random.uniform(rng_interval, (), minval=minval_interval, maxval=maxval_interval)
+
+        return updated_data, time_remaining
+
+    def get_initial_event_state(self, rng: PRNGKeyArray) -> Array:
+        minval, maxval = self.interval_range
+        return jax.random.uniform(rng, (), minval=minval, maxval=maxval)
+    
+@attrs.define(frozen=True)
+class FeetPositionObservation(ksim.Observation):
+    foot_left: int = attrs.field()
+    foot_right: int = attrs.field()
+    floor_threshold: float = attrs.field(default=0.0)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        physics_model: ksim.PhysicsModel,
+        foot_left_site_name: str,
+        foot_right_site_name: str,
+        floor_threshold: float = 0.0,
+    ) -> Self:
+        foot_left_idx = get_site_data_idx_from_name(physics_model, foot_left_site_name)
+        foot_right_idx = get_site_data_idx_from_name(physics_model, foot_right_site_name)
+        return cls(
+            foot_left=foot_left_idx,
+            foot_right=foot_right_idx,
+            floor_threshold=floor_threshold,
+        )
+
+    def observe(self, state: ksim.ObservationState, rng: PRNGKeyArray) -> Array:
+        foot_left_pos = state.physics_state.data.site_xpos[self.foot_left] + jnp.array([0.0, 0.0, self.floor_threshold])
+        foot_right_pos = state.physics_state.data.site_xpos[self.foot_right] + jnp.array(
+            [0.0, 0.0, self.floor_threshold]
+        )
+        return jnp.concatenate([foot_left_pos, foot_right_pos], axis=-1)
+    
+@attrs.define(frozen=True, kw_only=True)
+class FeetContactObservation(ksim.FeetContactObservation):
+    """Observation of the feet contact."""
+
+    def observe(self, state: ksim.ObservationState, rng: PRNGKeyArray) -> Array:
+        feet_contact_12 = super().observe(state, rng)
+        return feet_contact_12.flatten()
 
 
 class ZbotActor(eqx.Module):
@@ -397,7 +667,7 @@ class ZbotActor(eqx.Module):
         self.mlp = eqx.nn.MLP(
             in_size=NUM_INPUTS,
             out_size=NUM_OUTPUTS * 2,
-            width_size=64,
+            width_size=256,
             depth=5,
             key=key,
             activation=jax.nn.relu,
@@ -407,17 +677,31 @@ class ZbotActor(eqx.Module):
         self.var_scale = var_scale
         self.mean_scale = mean_scale
 
-    def __call__(
+    def forward(
         self,
+        timestep_phase_4: Array,
         joint_pos_n: Array,
         joint_vel_n: Array,
         imu_acc_3: Array,
         imu_gyro_3: Array,
         lin_vel_cmd_2: Array,
+        ang_vel_cmd_1: Array,
+        gait_freq_cmd_1: Array,
         last_action_n: Array,
     ) -> distrax.Normal:
         x_n = jnp.concatenate(
-            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n], axis=-1
+            [
+                timestep_phase_4,
+                joint_pos_n, 
+                joint_vel_n, 
+                imu_acc_3, 
+                imu_gyro_3, 
+                lin_vel_cmd_2, 
+                ang_vel_cmd_1, 
+                gait_freq_cmd_1, 
+                last_action_n
+            ], 
+            axis=-1
         )  # (NUM_INPUTS)
 
         return self.call_flat_obs(x_n)
@@ -449,33 +733,80 @@ class ZbotCritic(eqx.Module):
 
     def __init__(self, key: PRNGKeyArray) -> None:
         self.mlp = eqx.nn.MLP(
-            in_size=NUM_INPUTS,
+            in_size=NUM_CRITIC_INPUTS,
             out_size=1,  # Always output a single critic value.
-            width_size=64,
+            width_size=256,
             depth=5,
             key=key,
             activation=jax.nn.relu,
         )
 
-    def __call__(
+    def forward(
         self,
+        timestep_phase_4: Array,
         joint_pos_n: Array,
         joint_vel_n: Array,
         imu_acc_3: Array,
         imu_gyro_3: Array,
         lin_vel_cmd_2: Array,
+        ang_vel_cmd_1: Array,
+        gait_freq_cmd_1: Array,
         last_action_n: Array,
+        feet_colliding_2: Array,
+        feet_contact_2: Array,
+        feet_position_6: Array,
+        projected_gravity_3: Array,
+        base_position_3: Array,
+        base_orientation_4: Array,
+        base_linear_velocity_3: Array,
+        base_angular_velocity_3: Array,
+        actuator_force_n: Array,
+        true_height_1: Array,
     ) -> Array:
+        # print("timestep_phase_4 shape:", timestep_phase_4.shape)
+        # print("joint_pos_n shape:", joint_pos_n.shape)
+        # print("joint_vel_n shape:", joint_vel_n.shape)
+        # print("imu_acc_3 shape:", imu_acc_3.shape)
+        # print("imu_gyro_3 shape:", imu_gyro_3.shape)
+        # print("lin_vel_cmd_2 shape:", lin_vel_cmd_2.shape)
+        # print("ang_vel_cmd shape:", ang_vel_cmd_1.shape)
+        # print("gait_freq_cmd shape:", gait_freq_cmd_1.shape)
+        # print("last_action_n shape:", last_action_n.shape)
+        # print("feet_colliding_1 shape:", feet_colliding_2.shape)
+        # print("feet_contact_2 shape:", feet_contact_2.shape)
+        # print("feet_position_6 shape:", feet_position_6.shape)
+        # print("projected_gravity_3 shape:", projected_gravity_3.shape)
+        # print("base_position_3 shape:", base_position_3.shape)
+        # print("base_orientation_4 shape:", base_orientation_4.shape)
+        # print("base_linear_velocity_3 shape:", base_linear_velocity_3.shape)
+        # print("base_angular_velocity_3 shape:", base_angular_velocity_3.shape)
+        # print("actuator_force_n shape:", actuator_force_n.shape)
+        # print("true_height_1 shape:", true_height_1.shape)
         x_n = jnp.concatenate(
-            [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n], axis=-1
-        )  # (NUM_INPUTS)
-        return self.call_flat_obs(x_n)
-
-    def call_flat_obs(
-        self,
-        flat_obs_n: Array,
-    ) -> Array:
-        return self.mlp(flat_obs_n)
+            [
+                timestep_phase_4,
+                joint_pos_n,
+                joint_vel_n,
+                imu_acc_3,
+                imu_gyro_3,
+                lin_vel_cmd_2,
+                ang_vel_cmd_1,
+                gait_freq_cmd_1,
+                last_action_n,
+                feet_colliding_2,
+                feet_contact_2,
+                feet_position_6,
+                projected_gravity_3,
+                base_position_3,
+                base_orientation_4,
+                base_linear_velocity_3,
+                base_angular_velocity_3,
+                actuator_force_n,
+                true_height_1,
+            ],
+            axis=-1,
+        )
+        return self.mlp(x_n)
 
 
 class ZbotModel(eqx.Module):
@@ -501,6 +832,9 @@ class ZbotWalkingTaskConfig(ZbotTaskConfig):
         value=1.0,
         help="The scale to apply to the actions.",
     )
+    
+    gait_freq_lower: float = xax.field(value=1.25)
+    gait_freq_upper: float = xax.field(value=2.0)
 
     # Optimizer parameters.
     learning_rate: float = xax.field(
@@ -540,36 +874,110 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         return optimizer
 
     def get_physics_randomizers(self, physics_model: ksim.PhysicsModel) -> list[ksim.PhysicsRandomizer]:
-        return [
-            ksim.StaticFrictionRandomizer(scale_lower=0.5, scale_upper=2.0),
-            ksim.JointZeroPositionRandomizer(scale_lower=-0.05, scale_upper=0.05),
-            ksim.ArmatureRandomizer(scale_lower=1.0, scale_upper=1.05),
-            ksim.MassMultiplicationRandomizer.from_body_name(physics_model, "Top_Brace"),
-            ksim.JointDampingRandomizer(scale_lower=0.95, scale_upper=1.05),
-        ]
+        if self.config.domain_randomize:
+            return [
+                ksim.FloorFrictionRandomizer.from_geom_name(physics_model, "floor", scale_lower=0.1, scale_upper=2.0),
+                ksim.StaticFrictionRandomizer(scale_lower=0.5, scale_upper=1.5),
+                ksim.ArmatureRandomizer(),
+                ksim.MassAdditionRandomizer.from_body_name(
+                    physics_model, "Top_Brace", scale_lower=-0.5, scale_upper=0.5
+                ),
+                ksim.JointDampingRandomizer(scale_lower=0.95, scale_upper=1.05),
+                ksim.JointZeroPositionRandomizer(scale_lower=-0.05, scale_upper=0.05),
+            ]
+        else:
+            return []
 
     def get_resets(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reset]:
+        scale = 0.01 if self.config.domain_randomize else 0.0
         return [
-            ksim.RandomJointPositionReset(scale=0.01),
-            ksim.RandomJointVelocityReset(scale=0.01),
+            ksim.RandomBaseVelocityXYReset(scale=scale),
+            ksim.RandomJointPositionReset(scale=scale),
+            ksim.RandomJointVelocityReset(scale=scale),
         ]
+        
+    def get_events(self, physics_model: ksim.PhysicsModel) -> list[ksim.Event]:
+        if self.config.domain_randomize:
+            return [
+                XYPushEvent(
+                    interval_range=(2.0, 4.0),
+                    force_range=(0.0, 0.5),
+                ),
+                TorquePushEvent(
+                    interval_range=(2.0, 4.0),
+                    ang_vel_range=(0.0, 0.5),
+                ),
+            ]
+        else:
+            return []
+        
+    def get_curriculum(self, physics_model: ksim.PhysicsModel) -> Curriculum:
+        return ksim.EpisodeLengthCurriculum(
+            num_levels=10,
+            increase_threshold=20.0,
+            decrease_threshold=10.0,
+            min_level_steps=5,
+            dt=self.config.ctrl_dt,  # not sure what this is for
+        )
 
     def get_observations(self, physics_model: ksim.PhysicsModel) -> list[ksim.Observation]:
+        if self.config.domain_randomize:
+            joint_pos_noise = 0.1
+            vel_obs_noise = 2.5
+            imu_acc_noise = 0.5
+            imu_gyro_noise = 0.5
+            gvec_noise = 0.08
+            base_position_noise = 0.0
+            base_orientation_noise = 0.0
+            base_linear_velocity_noise = 0.0
+            base_angular_velocity_noise = 0.0
+            base_angular_velocity_noise = 0.0
+        else:
+            joint_pos_noise = 0.0
+            vel_obs_noise = 0.0
+            imu_acc_noise = 0.0
+            imu_gyro_noise = 0.0
+            gvec_noise = 0.0
+            base_position_noise = 0.0
+            base_orientation_noise = 0.0
+            base_linear_velocity_noise = 0.0
+            base_angular_velocity_noise = 0.0
+            base_angular_velocity_noise = 0.0
         return [
-            DHJointPositionObservation(),
-            DHJointVelocityObservation(),
-            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="imu_acc", noise=0.5),
-            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="imu_gyro", noise=0.2),
-            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="base_link_quat", noise=0.1),
-            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="base_link_vel", noise=0.1),
-            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="base_link_ang_vel", noise=0.1),
+            TimestepPhaseObservation(),
+            JointPositionObservation(noise=joint_pos_noise),
+            ksim.JointVelocityObservation(noise=vel_obs_noise),
+            ksim.ActuatorForceObservation(),
+            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="imu_acc", noise=imu_acc_noise),
+            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="imu_gyro", noise=imu_gyro_noise),
+            ProjectedGravityObservation(noise=gvec_noise),
             LastActionObservation(noise=0.0),
+            ksim.BasePositionObservation(noise=base_position_noise),
+            ksim.BaseOrientationObservation(noise=base_orientation_noise),
+            ksim.BaseLinearVelocityObservation(noise=base_linear_velocity_noise),
+            ksim.BaseAngularVelocityObservation(noise=base_angular_velocity_noise),
+            ksim.CenterOfMassVelocityObservation(),
+            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="left_foot_force", noise=0.0),
+            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="right_foot_force", noise=0.0),
+            FeetContactObservation.create(
+                physics_model=physics_model,
+                foot_left_geom_names="Left_Foot_collision_box",
+                foot_right_geom_names="Right_Foot_collision_box",
+                floor_geom_names="floor",
+            ),
+            FeetPositionObservation.create(
+                physics_model=physics_model,
+                foot_left_site_name="left_foot",
+                foot_right_site_name="right_foot",
+                floor_threshold=0.00,
+            ),
             ContactObservation.create(
                 physics_model=physics_model,
                 geom_names=["Left_Foot_collision_box", "Right_Foot_collision_box"],
                 contact_group="feet",
                 noise=0.0,
             ),
+            TrueHeightObservation(),
         ]
 
     def get_curriculum(self, physics_model: ksim.PhysicsModel) -> Curriculum:
@@ -578,26 +986,41 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         return ConstantCurriculum(level=1.0)
 
     def get_commands(self, physics_model: ksim.PhysicsModel) -> list[ksim.Command]:
-        switch_prob = self.config.ctrl_dt / 5
+        # NOTE: increase to 360
         return [
-            LinearVelocityCommand(index="x", range=(0.1, 0.5), zero_prob=0.0, switch_prob=switch_prob),
-            LinearVelocityCommand(index="y", range=(-0.05, 0.05), zero_prob=0.0, switch_prob=switch_prob),
-            AngularVelocityCommand(index="z", scale=0.0, zero_prob=1.0, switch_prob=switch_prob),
+            LinearVelocityCommand(
+                x_range=(-0.2, 0.2),
+                y_range=(-0.1, 0.1),
+                x_zero_prob=0.1,
+                y_zero_prob=0.2,
+                switch_prob=self.config.ctrl_dt / 3,
+            ),
+            AngularVelocityCommand(
+                scale=0.1,
+                zero_prob=0.9,
+                switch_prob=self.config.ctrl_dt / 3,
+            ),
+            GaitFrequencyCommand(
+                gait_freq_lower=self.config.gait_freq_lower,
+                gait_freq_upper=self.config.gait_freq_upper,
+            ),
         ]
 
     def get_rewards(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reward]:
         return [
-            JointDeviationPenalty(scale=-1.0),
-            DHControlPenalty(scale=-0.05),
+            # JointDeviationPenalty(scale=-1.0),
+            # DHControlPenalty(scale=-0.05),
             DHHealthyReward(scale=0.5),
-            DHControlPenalty(scale=-0.01),
+            # DHControlPenalty(scale=-0.01),
             TerminationPenalty(scale=-5.0),
-            LinearVelocityTrackingReward(scale=2.0),
-            AngularVelocityTrackingReward(scale=0.75),
+            # LinearVelocityTrackingReward(scale=2.0),
+            # AngularVelocityTrackingReward(scale=0.75),
+            OrientationPenalty(scale=-2.0),
             FeetContactPenalty(
                 contact_obs_key="contact_observation_feet",
                 scale=-2.0,
             ),
+            NaiveVelocityReward(scale=1.0),
         ]
 
     def get_terminations(self, physics_model: ksim.PhysicsModel) -> list[ksim.Termination]:
@@ -606,15 +1029,7 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
             ksim.PitchTooGreatTermination(max_pitch=1.04),
         ]
 
-    def get_events(self, physics_model: ksim.PhysicsModel) -> list[ksim.Event]:
-        return [
-            ksim.PushEvent(
-                x_force=0.2,
-                y_force=0.2,
-                z_force=0.0,
-                interval_range=(1.0, 2.0),
-            ),
-        ]
+
 
     def get_model(self, key: PRNGKeyArray) -> ZbotModel:
         return ZbotModel(key)
@@ -628,20 +1043,26 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
     ) -> distrax.Normal:
-        joint_pos_n = observations["dhjoint_position_observation"]
-        joint_vel_n = observations["dhjoint_velocity_observation"]
+        timestep_phase_4 = observations["timestep_phase_observation"]
+        joint_pos_n = observations["joint_position_observation"]
+        joint_vel_n = observations["joint_velocity_observation"]
         imu_acc_3 = observations["sensor_observation_imu_acc"]
         imu_gyro_3 = observations["sensor_observation_imu_gyro"]
-        lin_vel_cmd_x = commands["linear_velocity_command_x"]
-        lin_vel_cmd_y = commands["linear_velocity_command_y"]
-        lin_vel_cmd_2 = jnp.concatenate([lin_vel_cmd_x, lin_vel_cmd_y], axis=-1)
+        lin_vel_cmd_2 = commands["linear_velocity_command"]
+        ang_vel_cmd_1 = commands["angular_velocity_command"]
+        gait_freq_cmd_1 = commands["gait_frequency_command"]
         last_action_n = observations["last_action_observation"]
-
-        # Concatenate inputs like the humanoid example
-        x_n = jnp.concatenate([joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n], axis=-1)
-
-        # Call the actor with a flat observation tensor
-        return model.actor.call_flat_obs(x_n)
+        return model.actor.forward(
+            timestep_phase_4=timestep_phase_4, 
+            joint_pos_n=joint_pos_n, 
+            joint_vel_n=joint_vel_n, 
+            imu_acc_3=imu_acc_3, 
+            imu_gyro_3=imu_gyro_3, 
+            lin_vel_cmd_2=lin_vel_cmd_2, 
+            ang_vel_cmd_1=ang_vel_cmd_1, 
+            gait_freq_cmd_1=gait_freq_cmd_1, 
+            last_action_n=last_action_n
+        )
 
     def _run_critic(
         self,
@@ -649,65 +1070,76 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
     ) -> Array:
-        joint_pos_n = observations["dhjoint_position_observation"]
-        joint_vel_n = observations["dhjoint_velocity_observation"]
+        timestep_phase_4 = observations["timestep_phase_observation"]
+        joint_pos_n = observations["joint_position_observation"]
+        joint_vel_n = observations["joint_velocity_observation"]
         imu_acc_3 = observations["sensor_observation_imu_acc"]
         imu_gyro_3 = observations["sensor_observation_imu_gyro"]
-        lin_vel_cmd_x = commands["linear_velocity_command_x"]
-        lin_vel_cmd_y = commands["linear_velocity_command_y"]
-        lin_vel_cmd_2 = jnp.concatenate([lin_vel_cmd_x, lin_vel_cmd_y], axis=-1)
+        lin_vel_cmd_2 = commands["linear_velocity_command"]
+        ang_vel_cmd_1 = commands["angular_velocity_command"]
+        gait_freq_cmd = commands["gait_frequency_command"]
         last_action_n = observations["last_action_observation"]
+        # Critic obs
+        feet_colliding_2 = observations["contact_observation_feet"]
+        feet_contact_2 = observations["feet_contact_observation"]
+        feet_position_6 = observations["feet_position_observation"]
+        projected_gravity_3 = observations["projected_gravity_observation"]
+        base_position_3 = observations["base_position_observation"]
+        base_orientation_4 = observations["base_orientation_observation"]
+        base_linear_velocity_3 = observations["base_linear_velocity_observation"]
+        base_angular_velocity_3 = observations["base_angular_velocity_observation"]
+        actuator_force_n = observations["actuator_force_observation"]
+        true_height_1 = observations["true_height_observation"]
 
-        # Concatenate inputs
-        x_n = jnp.concatenate([joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n], axis=-1)
-
-        # Call critic with flat observation tensor
-        return model.critic.call_flat_obs(x_n)
+        return model.critic.forward(
+            timestep_phase_4=timestep_phase_4,
+            joint_pos_n=joint_pos_n,
+            joint_vel_n=joint_vel_n,
+            imu_acc_3=imu_acc_3,
+            imu_gyro_3=imu_gyro_3,
+            lin_vel_cmd_2=lin_vel_cmd_2,
+            ang_vel_cmd_1=ang_vel_cmd_1,
+            gait_freq_cmd_1=gait_freq_cmd,
+            last_action_n=last_action_n,
+            # critic observations
+            feet_colliding_2=feet_colliding_2,
+            feet_contact_2=feet_contact_2,
+            feet_position_6=feet_position_6,
+            projected_gravity_3=projected_gravity_3,
+            base_position_3=base_position_3,
+            base_orientation_4=base_orientation_4,
+            base_linear_velocity_3=base_linear_velocity_3,
+            base_angular_velocity_3=base_angular_velocity_3,
+            actuator_force_n=actuator_force_n,
+            true_height_1=true_height_1,
+        )
 
     def get_ppo_variables(
         self,
         model: ZbotModel,
         trajectories: ksim.Trajectory,
-        model_carry: PyTree,
+        carry: None,
         rng: PRNGKeyArray,
-    ) -> tuple[ksim.PPOVariables, PyTree]:
-        """Gets the variables required for computing PPO loss."""
-        # Instead of manually flattening and reshaping, use vmap to handle the batch dimensions automatically
+    ) -> tuple[ksim.PPOVariables, None]:
+        # Vectorize over the time dimensions.
 
-        # Define a function to process a single timestep
-        def process_single_timestep(
-            obs: FrozenDict[str, Array], cmd: FrozenDict[str, Array], action: Array
-        ) -> tuple[Array, Array]:
-            # Extract observations and commands for a single timestep
-            joint_pos_n = obs["dhjoint_position_observation"]
-            joint_vel_n = obs["dhjoint_velocity_observation"]
-            imu_acc_3 = obs["sensor_observation_imu_acc"]
-            imu_gyro_3 = obs["sensor_observation_imu_gyro"]
-            lin_vel_cmd_x = cmd["linear_velocity_command_x"]
-            lin_vel_cmd_y = cmd["linear_velocity_command_y"]
-            lin_vel_cmd_2 = jnp.concatenate([lin_vel_cmd_x, lin_vel_cmd_y], axis=-1)
-            last_action_n = obs["last_action_observation"]
+        def get_log_prob(transition: ksim.Trajectory) -> Array:
+            action_dist_n = self._run_actor(model, transition.obs, transition.command)
+            log_probs_n = action_dist_n.log_prob(transition.action / model.actor.mean_scale)
+            return log_probs_n
 
-            # Concatenate inputs - this works on a single example, no batch dimension
-            flat_obs = jnp.concatenate(
-                [joint_pos_n, joint_vel_n, imu_acc_3, imu_gyro_3, lin_vel_cmd_2, last_action_n], axis=-1
-            )
+        log_probs_tn = jax.vmap(get_log_prob)(trajectories)
 
-            # Call models to get log probs and values
-            action_dist = model.actor.call_flat_obs(flat_obs)
-            log_prob = action_dist.log_prob(action)
-            value = model.critic.call_flat_obs(flat_obs).squeeze(-1)
+        values_tn = jax.vmap(self._run_critic, in_axes=(None, 0, 0))(
+            model, trajectories.obs, trajectories.command
+        )
 
-            return log_prob, value
+        ppo_variables = ksim.PPOVariables(
+            log_probs=log_probs_tn,
+            values=values_tn.squeeze(-1),
+        )
 
-        # Vectorize the processing function over the time dimension
-        vmapped_process = jax.vmap(process_single_timestep)
-
-        # Apply the vectorized function to all timesteps
-        log_probs, values = vmapped_process(trajectories.obs, trajectories.command, trajectories.action)
-
-        # Return PPO variables and model carry
-        return ksim.PPOVariables(log_probs=log_probs, values=values), model_carry
+        return ppo_variables, jnp.zeros(0)
 
     def sample_action(
         self,
@@ -718,10 +1150,11 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
         rng: PRNGKeyArray,
+        argmax: bool = False,
     ) -> ksim.Action:
         action_dist_n = self._run_actor(model, observations, commands)
-        action_n = action_dist_n.sample(seed=rng) * self.config.action_scale
-
+        action_n = action_dist_n.sample(seed=rng) if not argmax else action_dist_n.mode()
+        action_n = action_n * self.config.action_scale
         return ksim.Action(action=action_n, carry=jnp.zeros(0), aux_outputs=None)
 
 
@@ -738,8 +1171,9 @@ if __name__ == "__main__":
             ctrl_dt=0.02,
             max_action_latency=0.005,
             min_action_latency=0.0,
-            log_full_trajectory_every_n_steps=5,
-            log_full_trajectory_on_first_step=True,
+            # log_full_trajectory_every_n_steps=5,
+            # log_full_trajectory_on_first_step=True,
+            valid_every_n_steps=5,
             save_every_n_steps=5,
             rollout_length_seconds=5.0,
             # PPO parameters

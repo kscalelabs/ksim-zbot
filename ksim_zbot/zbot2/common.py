@@ -45,6 +45,11 @@ class ZbotTaskConfig(ksim.PPOConfig):
         help="The path to the assets directory for actuator models",
     )
 
+    domain_randomize: bool = xax.field(
+        value=True,
+        help="Whether to randomize the task parameters.",
+    )
+
     # Checkpointing parameters.
     export_for_inference: bool = xax.field(
         value=True,
