@@ -1053,15 +1053,15 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         # NOTE: increase to 360
         return [
             LinearVelocityCommand(
-                x_range=(-0.0, 0.0),
-                y_range=(-0.0, 0.0),
-                x_zero_prob=1.0,
-                y_zero_prob=1.0,
+                x_range=(-2.0, 2.0),
+                y_range=(-1.0, 1.0),
+                x_zero_prob=0.1,
+                y_zero_prob=0.2,
                 switch_prob=self.config.ctrl_dt / 3,
             ),
             AngularVelocityCommand(
                 scale=0.1,
-                zero_prob=1.0,
+                zero_prob=0.9,
                 switch_prob=self.config.ctrl_dt / 3,
             ),
             GaitFrequencyCommand(
@@ -1078,24 +1078,24 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
             DHHealthyReward(scale=0.5),
             # DHControlPenalty(scale=-0.01),
             TerminationPenalty(scale=-5.0),
-            # LinearVelocityTrackingReward(scale=2.0),
-            # AngularVelocityTrackingReward(
-            #     scale=0.75,
-            #     angvel_obs_name="base_angular_velocity_observation",
-            #     command_name="angular_velocity_command",
-            # ),
+            LinearVelocityTrackingReward(scale=2.0),
+            AngularVelocityTrackingReward(
+                scale=0.75,
+                angvel_obs_name="base_angular_velocity_observation",
+                command_name="angular_velocity_command",
+            ),
             OrientationPenalty(scale=-2.0),
             FeetContactPenalty(
                 contact_obs_key="contact_observation_feet",
                 scale=-2.0,
             ),
-            # FeetPhaseReward(
-            #     foot_default_height=0.04,
-            #     max_foot_height=0.12,
-            #     scale=2.1,
-            #     stand_still_threshold=0.0,
-            # ),
-            NaiveVelocityReward(scale=1.0),
+            FeetPhaseReward(
+                foot_default_height=0.04,
+                max_foot_height=0.12,
+                scale=20.1,
+                stand_still_threshold=0.0,
+            ),
+            # NaiveVelocityReward(scale=1.0),
         ]
 
     def get_terminations(self, physics_model: ksim.PhysicsModel) -> list[ksim.Termination]:
