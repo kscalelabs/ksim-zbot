@@ -338,17 +338,14 @@ class LinearVelocityTrackingReward(ksim.Reward):
     """Reward for tracking the linear velocity."""
 
     error_scale: float = attrs.field(default=0.25)
-    linvel_obs_name: str = attrs.field(default="sensor_observation_base_link_vel")
-    command_name_x: str = attrs.field(default="linear_velocity_command_x")
-    command_name_y: str = attrs.field(default="linear_velocity_command_y")
+    linvel_obs_name: str = attrs.field(default="base_linear_velocity_observation")
+    command_name: str = attrs.field(default="linear_velocity_command")
     norm: xax.NormType = attrs.field(default="l2")
 
     def __call__(self, trajectory: ksim.Trajectory, reward_carry: PyTree) -> tuple[Array, PyTree]:
         if self.linvel_obs_name not in trajectory.obs:
             raise ValueError(f"Observation {self.linvel_obs_name} not found; add it as an observation in your task.")
-        command = jnp.concatenate(
-            [trajectory.command[self.command_name_x], trajectory.command[self.command_name_y]], axis=-1
-        )
+        command = trajectory.command[self.command_name]
         lin_vel_error = xax.get_norm(command - trajectory.obs[self.linvel_obs_name][..., :2], self.norm).sum(axis=-1)
         return jnp.exp(-lin_vel_error / self.error_scale), None
 
@@ -464,8 +461,8 @@ class AngularVelocityTrackingReward(ksim.Reward):
     """Reward for tracking the angular velocity."""
 
     error_scale: float = attrs.field(default=0.25)
-    angvel_obs_name: str = attrs.field(default="sensor_observation_base_link_ang_vel")
-    command_name: str = attrs.field(default="angular_velocity_command_z")
+    angvel_obs_name: str = attrs.field(default="base_angular_velocity_observation")
+    command_name: str = attrs.field(default="angular_velocity_command")
     norm: xax.NormType = attrs.field(default="l2")
 
     def __call__(self, trajectory: ksim.Trajectory, reward_carry: PyTree) -> tuple[Array, PyTree]:
@@ -986,15 +983,15 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         # NOTE: increase to 360
         return [
             LinearVelocityCommand(
-                x_range=(-0.2, 0.2),
-                y_range=(-0.1, 0.1),
-                x_zero_prob=0.1,
-                y_zero_prob=0.2,
+                x_range=(-0.0, 0.0),
+                y_range=(-0.0, 0.0),
+                x_zero_prob=1.0,
+                y_zero_prob=1.0,
                 switch_prob=self.config.ctrl_dt / 3,
             ),
             AngularVelocityCommand(
                 scale=0.1,
-                zero_prob=0.9,
+                zero_prob=1.0,
                 switch_prob=self.config.ctrl_dt / 3,
             ),
             GaitFrequencyCommand(
@@ -1011,14 +1008,18 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
             DHHealthyReward(scale=0.5),
             # DHControlPenalty(scale=-0.01),
             TerminationPenalty(scale=-5.0),
-            # LinearVelocityTrackingReward(scale=2.0),
-            # AngularVelocityTrackingReward(scale=0.75),
+            LinearVelocityTrackingReward(scale=2.0),
+            AngularVelocityTrackingReward(
+                scale=0.75,
+                angvel_obs_name="base_angular_velocity_observation",
+                command_name="angular_velocity_command",
+            ),
             OrientationPenalty(scale=-2.0),
             FeetContactPenalty(
                 contact_obs_key="contact_observation_feet",
                 scale=-2.0,
             ),
-            NaiveVelocityReward(scale=1.0),
+            # NaiveVelocityReward(scale=1.0),
         ]
 
     def get_terminations(self, physics_model: ksim.PhysicsModel) -> list[ksim.Termination]:
