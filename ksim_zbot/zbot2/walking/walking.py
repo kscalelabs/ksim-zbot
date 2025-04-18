@@ -16,7 +16,7 @@ from jax.scipy.spatial.transform import Rotation
 from jaxtyping import Array, PRNGKeyArray, PyTree
 from ksim import Reward
 from ksim.curriculum import Curriculum
-from ksim.observation import ContactObservation, ObservationState
+from ksim.observation import ContactObservation, ObservationInput
 from ksim.types import PhysicsState, Trajectory
 from ksim.utils.mujoco import (
     get_qpos_data_idxs_by_name,
@@ -165,7 +165,7 @@ class JointPositionObservation(ksim.Observation):
     default_targets: tuple[float, ...] = attrs.field(default=(0.0,) * NUM_OUTPUTS)
     noise: float = attrs.field(default=0.0)
 
-    def observe(self, state: ksim.ObservationState, rng: PRNGKeyArray) -> Array:
+    def observe(self, state: ksim.ObservationInput, rng: PRNGKeyArray) -> Array:
         qpos = state.physics_state.data.qpos[7:]  # (N,)
         diff = qpos - jnp.array(self.default_targets)
         return diff
@@ -175,7 +175,7 @@ class JointPositionObservation(ksim.Observation):
 class ProjectedGravityObservation(ksim.Observation):
     noise: float = attrs.field(default=0.0)
 
-    def observe(self, state: ksim.ObservationState, rng: PRNGKeyArray) -> Array:
+    def observe(self, state: ksim.ObservationInput, rng: PRNGKeyArray) -> Array:
         gvec = xax.get_projected_gravity_vector_from_quat(state.physics_state.data.qpos[3:7])
         return gvec
 
@@ -184,13 +184,13 @@ class ProjectedGravityObservation(ksim.Observation):
 class TrueHeightObservation(ksim.Observation):
     """Observation of the true height of the body."""
 
-    def observe(self, state: ksim.ObservationState, rng: PRNGKeyArray) -> Array:
+    def observe(self, state: ksim.ObservationInput, rng: PRNGKeyArray) -> Array:
         return jnp.atleast_1d(state.physics_state.data.qpos[2])
 
 
 @attrs.define(frozen=True)
 class HistoryObservation(ksim.Observation):
-    def observe(self, state: ObservationState, rng: PRNGKeyArray) -> Array:
+    def observe(self, state: ObservationInput, rng: PRNGKeyArray) -> Array:
         return jnp.zeros(0, dtype=jnp.float32)
 
 
@@ -198,7 +198,7 @@ class HistoryObservation(ksim.Observation):
 class LastActionObservation(ksim.Observation):
     noise: float = attrs.field(default=0.0)
 
-    def observe(self, state: ObservationState, rng: PRNGKeyArray) -> Array:
+    def observe(self, state: ObservationInput, rng: PRNGKeyArray) -> Array:
         return state.physics_state.most_recent_action
 
     def add_noise(self, observation: Array, curriculum_level: Array, rng: PRNGKeyArray) -> Array:
@@ -211,7 +211,7 @@ class TimestepPhaseObservation(ksim.TimestepObservation):
 
     ctrl_dt: float = attrs.field(default=0.02)
 
-    def observe(self, state: ksim.ObservationState, rng: PRNGKeyArray) -> Array:
+    def observe(self, state: ksim.ObservationInput, rng: PRNGKeyArray) -> Array:
         gait_freq = state.commands["gait_frequency_command"]
         timestep = super().observe(state, rng)
         steps = timestep / self.ctrl_dt
@@ -278,7 +278,7 @@ class HeightReward(ksim.Reward):
 class DHJointVelocityObservation(ksim.Observation):
     noise: float = attrs.field(default=0.0)
 
-    def observe(self, state: ObservationState, rng: PRNGKeyArray) -> Array:
+    def observe(self, state: ObservationInput, rng: PRNGKeyArray) -> Array:
         qvel = state.physics_state.data.qvel[6:]  # (N,)
         return qvel
 
@@ -290,7 +290,7 @@ class DHJointVelocityObservation(ksim.Observation):
 class DHJointPositionObservation(ksim.Observation):
     noise: float = attrs.field(default=0.0)
 
-    def observe(self, state: ObservationState, rng: PRNGKeyArray) -> Array:
+    def observe(self, state: ObservationInput, rng: PRNGKeyArray) -> Array:
         qpos = state.physics_state.data.qpos[7:]  # (N,)
         return qpos
 
@@ -631,7 +631,7 @@ class FeetPositionObservation(ksim.Observation):
             floor_threshold=floor_threshold,
         )
 
-    def observe(self, state: ksim.ObservationState, rng: PRNGKeyArray) -> Array:
+    def observe(self, state: ksim.ObservationInput, rng: PRNGKeyArray) -> Array:
         foot_left_pos = state.physics_state.data.site_xpos[self.foot_left] + jnp.array([0.0, 0.0, self.floor_threshold])
         foot_right_pos = state.physics_state.data.site_xpos[self.foot_right] + jnp.array(
             [0.0, 0.0, self.floor_threshold]
@@ -643,7 +643,7 @@ class FeetPositionObservation(ksim.Observation):
 class FeetContactObservation(ksim.FeetContactObservation):
     """Observation of the feet contact."""
 
-    def observe(self, state: ksim.ObservationState, rng: PRNGKeyArray) -> Array:
+    def observe(self, state: ksim.ObservationInput, rng: PRNGKeyArray) -> Array:
         feet_contact_12 = super().observe(state, rng)
         return feet_contact_12.flatten()
 
