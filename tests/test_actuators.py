@@ -91,6 +91,8 @@ def test_actuator_basic_functionality(
     # In a real scenario, these would likely come from metadata or config
     kp_j = jnp.array([20.0] * num_actuators)
     kd_j = jnp.array([5.0] * num_actuators)
+    vmax_j = jnp.array([5.0] * num_actuators)
+    amax_j = jnp.array([39.0] * num_actuators)
 
     max_torque_j = jnp.array([params["max_torque"]] * num_actuators)
     max_velocity_j = jnp.array([params["max_velocity"]] * num_actuators)
@@ -109,6 +111,8 @@ def test_actuator_basic_functionality(
         vin_j=vin_j,
         kt_j=kt_j,
         r_j=r_j,
+        vmax_j=vmax_j,
+        amax_j=amax_j,
         dt=0.001,
         error_gain_j=error_gain_j,
     )
@@ -117,7 +121,15 @@ def test_actuator_basic_functionality(
     print(f"Input action_j: {action_j}")
 
     rng = jax.random.PRNGKey(0)
-    torque_j = actuators.get_ctrl(action_j, mock_physics_data, rng)
+
+    # Get initial state for the planner
+    initial_pos_j = mock_physics_data.qpos[7:]
+    initial_vel_j = mock_physics_data.qvel[6:]
+    initial_planner_state = actuators.get_default_state(initial_pos_j, initial_vel_j)
+
+    # Use get_stateful_ctrl instead of get_ctrl
+    torque_j, _ = actuators.get_stateful_ctrl(action_j, mock_physics_data, initial_planner_state, rng)
+
     print(f"Generated torque_j: {torque_j}")
 
     assert torque_j.shape == (num_actuators,)

@@ -3,3 +3,4 @@
 ksim
 mujoco-scenes
 tensorflow
+xax[exportable]
