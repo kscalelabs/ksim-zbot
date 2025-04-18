@@ -121,7 +121,15 @@ def test_actuator_basic_functionality(
     print(f"Input action_j: {action_j}")
 
     rng = jax.random.PRNGKey(0)
-    torque_j = actuators.get_ctrl(action_j, mock_physics_data, rng)
+
+    # Get initial state for the planner
+    initial_pos_j = mock_physics_data.qpos[7:]
+    initial_vel_j = mock_physics_data.qvel[6:]
+    initial_planner_state = actuators.get_default_state(initial_pos_j, initial_vel_j)
+
+    # Use get_stateful_ctrl instead of get_ctrl
+    torque_j, _ = actuators.get_stateful_ctrl(action_j, mock_physics_data, initial_planner_state, rng)
+
     print(f"Generated torque_j: {torque_j}")
 
     assert torque_j.shape == (num_actuators,)
