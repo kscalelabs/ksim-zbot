@@ -40,7 +40,12 @@ pip install -e .
 git submodule update --init --recursive
 ```
 
-6. Runing
+6. Run Training
+```bash
+python -m ksim_zbot.zbot2.walking.walking domain_randomize=False
+```
+
+7. Deployment
 ```bash
 python -m ksim_zbot.zbot2.deploy.deploy_sim --model_path ksim_zbot/zbot2/walking/zbot_walking_task/run_13/checkpoints/tf_model --episode_length 20
 ```
