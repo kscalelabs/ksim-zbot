@@ -91,6 +91,8 @@ def test_actuator_basic_functionality(
     # In a real scenario, these would likely come from metadata or config
     kp_j = jnp.array([20.0] * num_actuators)
     kd_j = jnp.array([5.0] * num_actuators)
+    vmax_j = jnp.array([5.0] * num_actuators)
+    amax_j = jnp.array([39.0] * num_actuators)
 
     max_torque_j = jnp.array([params["max_torque"]] * num_actuators)
     max_velocity_j = jnp.array([params["max_velocity"]] * num_actuators)
@@ -109,6 +111,8 @@ def test_actuator_basic_functionality(
         vin_j=vin_j,
         kt_j=kt_j,
         r_j=r_j,
+        vmax_j=vmax_j,
+        amax_j=amax_j,
         dt=0.001,
         error_gain_j=error_gain_j,
     )
