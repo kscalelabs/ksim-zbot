@@ -1116,7 +1116,7 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         trajectories: ksim.Trajectory,
         carry: None,
         rng: PRNGKeyArray,
-    ) -> tuple[ksim.PPOVariables, None]:
+    ) -> tuple[ksim.PPOVariables, Array]:
         # Vectorize over the time dimensions.
 
         def get_log_prob(transition: ksim.Trajectory) -> Array:
