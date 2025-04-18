@@ -419,6 +419,38 @@ class HipDeviationPenalty(ksim.Reward):
             joint_targets=joint_targets,
             scale=scale,
         )
+        
+@attrs.define(frozen=True, kw_only=True)
+class JointDeviationPenalty(ksim.Reward):
+    """Penalty for joint deviations."""
+
+    norm: xax.NormType = attrs.field(default="l2")
+    joint_targets: tuple[float, ...] = attrs.field(default=(0.0,) * NUM_OUTPUTS)
+    joint_weights: tuple[float, ...] = attrs.field(default=(1.0,) * NUM_OUTPUTS)
+
+    def __call__(self, trajectory: ksim.Trajectory, reward_carry: xax.FrozenDict[str, PyTree]) -> tuple[Array, None]:
+        diff = trajectory.qpos[..., 7:] - jnp.array(self.joint_targets)
+        cost = jnp.square(diff) * jnp.array(self.joint_weights)
+        reward_value = jnp.sum(cost, axis=-1)
+        return reward_value, None
+
+    @classmethod
+    def create(
+        cls,
+        physics_model: ksim.PhysicsModel,
+        scale: float = -1.0,
+        *,
+        joint_targets: tuple[float, ...],
+        joint_weights: tuple[float, ...] | None = None,
+    ) -> Self:
+        if joint_weights is None:
+            joint_weights = tuple([1.0] * len(joint_targets))
+
+        return cls(
+            scale=scale,
+            joint_targets=joint_targets,
+            joint_weights=joint_weights,
+        )
 
 
 @attrs.define(frozen=True, kw_only=True)
@@ -1008,6 +1040,7 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
 
     def get_rewards(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reward]:
         return [
+            # JointDeviationPenalty(scale=-1.0),
             # JointDeviationPenalty(scale=-1.0),
             # DHControlPenalty(scale=-0.05),
             DHHealthyReward(scale=0.5),
