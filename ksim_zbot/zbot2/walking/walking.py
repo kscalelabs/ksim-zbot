@@ -1072,30 +1072,30 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
 
     def get_rewards(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reward]:
         return [
-            # JointDeviationPenalty(scale=-1.0),
+            JointDeviationPenalty(scale=-0.1),
             # JointDeviationPenalty(scale=-1.0),
             # DHControlPenalty(scale=-0.05),
             DHHealthyReward(scale=0.5),
             # DHControlPenalty(scale=-0.01),
             TerminationPenalty(scale=-5.0),
-            LinearVelocityTrackingReward(scale=2.0),
-            AngularVelocityTrackingReward(
-                scale=0.75,
-                angvel_obs_name="base_angular_velocity_observation",
-                command_name="angular_velocity_command",
-            ),
+            # LinearVelocityTrackingReward(scale=2.0),
+            # AngularVelocityTrackingReward(
+            #     scale=0.75,
+            #     angvel_obs_name="base_angular_velocity_observation",
+            #     command_name="angular_velocity_command",
+            # ),
             OrientationPenalty(scale=-2.0),
             FeetContactPenalty(
                 contact_obs_key="contact_observation_feet",
                 scale=-2.0,
             ),
-            FeetPhaseReward(
-                foot_default_height=0.04,
-                max_foot_height=0.12,
-                scale=2.1,
-                stand_still_threshold=0.0,
-            ),
-            # NaiveVelocityReward(scale=1.0),
+            # FeetPhaseReward(
+            #     foot_default_height=0.04,
+            #     max_foot_height=0.12,
+            #     scale=2.1,
+            #     stand_still_threshold=0.0,
+            # ),
+            NaiveVelocityReward(scale=1.0),
         ]
 
     def get_terminations(self, physics_model: ksim.PhysicsModel) -> list[ksim.Termination]:
