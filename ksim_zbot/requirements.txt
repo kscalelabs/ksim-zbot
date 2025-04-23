@@ -1,6 +1,6 @@
 # requirements.txt
 
-ksim
+ksim==0.0.31
 mujoco-scenes
 tensorflow
-xax[exportable]
+xax[exportable]==0.2.6
