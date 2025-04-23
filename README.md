@@ -27,6 +27,15 @@ git clone git@github.com:kscalelabs/ksim-zbot.git
 python3.11 --version  # Should show Python 3.11 or greater
 ```
 
+3.1 Install jax with cuda
+```bash
+pip install -U "jax[cuda12]"    
+```
+3.2 Confirm jax is using cuda. This should print "gpu".
+```bash
+python -c "import jax; print(jax.default_backend())"
+```
+
 4. Install dependencies
 
 ```bash
