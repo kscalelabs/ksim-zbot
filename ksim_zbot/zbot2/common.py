@@ -16,10 +16,9 @@ import xax
 from jaxtyping import Array, PRNGKeyArray
 from kscale.web.gen.api import JointMetadataOutput
 from ksim.actuators import NoiseType, StatefulActuators
-from ksim.types import PhysicsData, PlannerState
+from ksim.types import PhysicsData
 from mujoco import mjx
 from mujoco_scenes.mjcf import load_mjmodel
-from xax.nn.export import export
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +28,13 @@ logger = logging.getLogger(__name__)
 class AuxOutputs:
     log_probs: Array
     values: Array
+
+
+@jax.tree_util.register_dataclass
+@dataclass(frozen=True)
+class PlannerState:
+    position: Array
+    velocity: Array
 
 
 @dataclass
@@ -174,7 +180,7 @@ class FeetechActuators(StatefulActuators):
         self,
         action: Array,
         physics_data: PhysicsData,
-        planner_state: PlannerState,
+        actuator_state: PlannerState,
         rng: PRNGKeyArray,
     ) -> tuple[Array, PlannerState]:
         """Compute torque control with velocity smoothing and duty cycle clipping (JAX friendly)."""
@@ -183,7 +189,7 @@ class FeetechActuators(StatefulActuators):
         current_pos_j = physics_data.qpos[7:]
         current_vel_j = physics_data.qvel[6:]
 
-        planner_state, (desired_position, desired_velocity) = trapezoidal_step(planner_state, action, self.dt)
+        actuator_state, (desired_position, desired_velocity) = trapezoidal_step(actuator_state, action, self.dt)
 
         pos_error_j = desired_position - current_pos_j
         vel_error_j = desired_velocity - current_vel_j
@@ -199,7 +205,7 @@ class FeetechActuators(StatefulActuators):
         # Add noise to torque
         torque_j_noisy = self.add_noise(self.torque_noise, self.torque_noise_type, torque_j, tor_rng)
 
-        return torque_j_noisy, planner_state
+        return torque_j_noisy, actuator_state
 
     def get_default_action(self, physics_data: PhysicsData) -> Array:
         return physics_data.qpos[7:]
@@ -207,6 +213,12 @@ class FeetechActuators(StatefulActuators):
     def get_default_state(self, initial_position: Array, initial_velocity: Array) -> PlannerState:
         """Initialize the planner state with the provided position and velocity."""
         return PlannerState(position=initial_position, velocity=initial_velocity)
+
+    def get_initial_state(self, physics_data: PhysicsData, rng: PRNGKeyArray) -> PlannerState:
+        """Implement abstract method to initialize planner state from physics data."""
+        initial_position = physics_data.qpos[7:]
+        initial_velocity = physics_data.qvel[6:]
+        return self.get_default_state(initial_position, initial_velocity)
 
 
 ZbotModel = TypeVar("ZbotModel", bound=eqx.Module)
@@ -526,17 +538,17 @@ class ZbotTask(ksim.PPOTask[Config], Generic[Config, ZbotModel]):
 
         state = super().on_after_checkpoint_save(ckpt_path, state)
 
-        model: ZbotModel = self.load_ckpt(ckpt_path, part="model")
+        # model: ZbotModel = self.load_ckpt(ckpt_path, part="model")
 
-        model_fn = self.make_export_model(model, stochastic=False, batched=True)
+        # model_fn = self.make_export_model(model, stochastic=False, batched=True)
 
-        input_shapes: list[tuple[int, ...]] = self.get_input_shapes
+        # input_shapes: list[tuple[int, ...]] = self.get_input_shapes
 
-        export(
-            model_fn,
-            input_shapes,
-            ckpt_path.parent / "tf_model",
-        )
+        # export(
+        #     model_fn,
+        #     input_shapes,
+        #     ckpt_path.parent / "tf_model",
+        # )
 
         return state
 

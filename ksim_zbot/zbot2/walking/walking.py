@@ -16,7 +16,7 @@ from jax.scipy.spatial.transform import Rotation
 from jaxtyping import Array, PRNGKeyArray, PyTree
 from ksim import Reward
 from ksim.curriculum import Curriculum
-from ksim.observation import ContactObservation, ObservationInput
+from ksim.observation import ObservationInput
 from ksim.types import PhysicsState, Trajectory
 from ksim.utils.mujoco import (
     get_qpos_data_idxs_by_name,
@@ -43,12 +43,13 @@ SINGLE_STEP_HISTORY_SIZE = 0
 # imu_acc_3: 3
 # imu_gyro_3: 3
 # last_action_n: 20
-OBS_SIZE = 4 + 20 + 20 + 3 + 3 + 20  # = 70
+# OBS_SIZE = 4 + 20 + 20 + 3 + 3 + 20  # = 70
+OBS_SIZE = 20
 # Command size:
 # lin_vel_cmd_2: 2
-CMD_SIZE = 2 + 1 + 1
-NUM_INPUTS = OBS_SIZE + CMD_SIZE  # 70 + 4 = 74
-NUM_CRITIC_INPUTS = NUM_INPUTS + 2 + 2 + 6 + 3 + 3 + 4 + 3 + 3 + 20 + 1  # = 121
+# CMD_SIZE = 2 + 1 + 1
+NUM_INPUTS = OBS_SIZE  # + CMD_SIZE  # 70 + 4 = 74
+NUM_CRITIC_INPUTS = NUM_INPUTS  #  + 2 + 2 + 6 + 3 + 3 + 4 + 3 + 3 + 20 + 1  # = 121
 # NUM_INPUTS = 66 + 2 = 68
 NUM_OUTPUTS = 20
 
@@ -681,27 +682,27 @@ class ZbotActor(eqx.Module):
 
     def forward(
         self,
-        timestep_phase_4: Array,
+        # timestep_phase_4: Array,
         joint_pos_n: Array,
-        joint_vel_n: Array,
-        imu_acc_3: Array,
-        imu_gyro_3: Array,
-        lin_vel_cmd_2: Array,
-        ang_vel_cmd_1: Array,
-        gait_freq_cmd_1: Array,
-        last_action_n: Array,
+        # joint_vel_n: Array,
+        # imu_acc_3: Array,
+        # imu_gyro_3: Array,
+        # lin_vel_cmd_2: Array,
+        # ang_vel_cmd_1: Array,
+        # gait_freq_cmd_1: Array,
+        # last_action_n: Array,
     ) -> distrax.Normal:
         x_n = jnp.concatenate(
             [
-                timestep_phase_4,
+                # timestep_phase_4,
                 joint_pos_n,
-                joint_vel_n,
-                imu_acc_3,
-                imu_gyro_3,
-                lin_vel_cmd_2,
-                ang_vel_cmd_1,
-                gait_freq_cmd_1,
-                last_action_n,
+                # joint_vel_n,
+                # imu_acc_3,
+                # imu_gyro_3,
+                # lin_vel_cmd_2,
+                # ang_vel_cmd_1,
+                # gait_freq_cmd_1,
+                # last_action_n,
             ],
             axis=-1,
         )  # (NUM_INPUTS)
@@ -745,25 +746,25 @@ class ZbotCritic(eqx.Module):
 
     def forward(
         self,
-        timestep_phase_4: Array,
+        # timestep_phase_4: Array,
         joint_pos_n: Array,
-        joint_vel_n: Array,
-        imu_acc_3: Array,
-        imu_gyro_3: Array,
-        lin_vel_cmd_2: Array,
-        ang_vel_cmd_1: Array,
-        gait_freq_cmd_1: Array,
-        last_action_n: Array,
-        feet_colliding_2: Array,
-        feet_contact_2: Array,
-        feet_position_6: Array,
-        projected_gravity_3: Array,
-        base_position_3: Array,
-        base_orientation_4: Array,
-        base_linear_velocity_3: Array,
-        base_angular_velocity_3: Array,
-        actuator_force_n: Array,
-        true_height_1: Array,
+        # joint_vel_n: Array,
+        # imu_acc_3: Array,
+        # imu_gyro_3: Array,
+        # lin_vel_cmd_2: Array,
+        # ang_vel_cmd_1: Array,
+        # gait_freq_cmd_1: Array,
+        # last_action_n: Array,
+        # feet_colliding_2: Array,
+        # feet_contact_2: Array,
+        # feet_position_6: Array,
+        # projected_gravity_3: Array,
+        # base_position_3: Array,
+        # base_orientation_4: Array,
+        # base_linear_velocity_3: Array,
+        # base_angular_velocity_3: Array,
+        # actuator_force_n: Array,
+        # true_height_1: Array,
     ) -> Array:
         # print("timestep_phase_4 shape:", timestep_phase_4.shape)
         # print("joint_pos_n shape:", joint_pos_n.shape)
@@ -786,25 +787,25 @@ class ZbotCritic(eqx.Module):
         # print("true_height_1 shape:", true_height_1.shape)
         x_n = jnp.concatenate(
             [
-                timestep_phase_4,
+                # timestep_phase_4,
                 joint_pos_n,
-                joint_vel_n,
-                imu_acc_3,
-                imu_gyro_3,
-                lin_vel_cmd_2,
-                ang_vel_cmd_1,
-                gait_freq_cmd_1,
-                last_action_n,
-                feet_colliding_2,
-                feet_contact_2,
-                feet_position_6,
-                projected_gravity_3,
-                base_position_3,
-                base_orientation_4,
-                base_linear_velocity_3,
-                base_angular_velocity_3,
-                actuator_force_n,
-                true_height_1,
+                # joint_vel_n,
+                # imu_acc_3,
+                # imu_gyro_3,
+                # lin_vel_cmd_2,
+                # ang_vel_cmd_1,
+                # gait_freq_cmd_1,
+                # last_action_n,
+                # feet_colliding_2,
+                # feet_contact_2,
+                # feet_position_6,
+                # projected_gravity_3,
+                # base_position_3,
+                # base_orientation_4,
+                # base_linear_velocity_3,
+                # base_angular_velocity_3,
+                # actuator_force_n,
+                # true_height_1,
             ],
             axis=-1,
         )
@@ -923,63 +924,64 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         )
 
     def get_observations(self, physics_model: ksim.PhysicsModel) -> list[ksim.Observation]:
-        if self.config.domain_randomize:
-            joint_pos_noise = 0.1
-            vel_obs_noise = 2.5
-            imu_acc_noise = 0.5
-            imu_gyro_noise = 0.5
-            gvec_noise = 0.08
-            base_position_noise = 0.0
-            base_orientation_noise = 0.0
-            base_linear_velocity_noise = 0.0
-            base_angular_velocity_noise = 0.0
-            base_angular_velocity_noise = 0.0
-        else:
-            joint_pos_noise = 0.0
-            vel_obs_noise = 0.0
-            imu_acc_noise = 0.0
-            imu_gyro_noise = 0.0
-            gvec_noise = 0.0
-            base_position_noise = 0.0
-            base_orientation_noise = 0.0
-            base_linear_velocity_noise = 0.0
-            base_angular_velocity_noise = 0.0
-            base_angular_velocity_noise = 0.0
+        # if self.config.domain_randomize:
+        #     joint_pos_noise = 0.1
+        #     vel_obs_noise = 2.5
+        #     imu_acc_noise = 0.5
+        #     imu_gyro_noise = 0.5
+        #     gvec_noise = 0.08
+        #     base_position_noise = 0.0
+        #     base_orientation_noise = 0.0
+        #     base_linear_velocity_noise = 0.0
+        #     base_angular_velocity_noise = 0.0
+        #     base_angular_velocity_noise = 0.0
+        # else:
+        #     joint_pos_noise = 0.0
+        #     vel_obs_noise = 0.0
+        #     imu_acc_noise = 0.0
+        #     imu_gyro_noise = 0.0
+        #     gvec_noise = 0.0
+        #     base_position_noise = 0.0
+        #     base_orientation_noise = 0.0
+        #     base_linear_velocity_noise = 0.0
+        #     base_angular_velocity_noise = 0.0
+        #     base_angular_velocity_noise = 0.0
         return [
-            TimestepPhaseObservation(),
-            JointPositionObservation(noise=joint_pos_noise),
-            ksim.JointVelocityObservation(noise=vel_obs_noise),
-            ksim.ActuatorForceObservation(),
-            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="imu_acc", noise=imu_acc_noise),
-            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="imu_gyro", noise=imu_gyro_noise),
-            ProjectedGravityObservation(noise=gvec_noise),
-            LastActionObservation(noise=0.0),
-            ksim.BasePositionObservation(noise=base_position_noise),
-            ksim.BaseOrientationObservation(noise=base_orientation_noise),
-            ksim.BaseLinearVelocityObservation(noise=base_linear_velocity_noise),
-            ksim.BaseAngularVelocityObservation(noise=base_angular_velocity_noise),
-            ksim.CenterOfMassVelocityObservation(),
-            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="left_foot_force", noise=0.0),
-            ksim.SensorObservation.create(physics_model=physics_model, sensor_name="right_foot_force", noise=0.0),
-            FeetContactObservation.create(
-                physics_model=physics_model,
-                foot_left_geom_names="Left_Foot_collision_box",
-                foot_right_geom_names="Right_Foot_collision_box",
-                floor_geom_names="floor",
-            ),
-            FeetPositionObservation.create(
-                physics_model=physics_model,
-                foot_left_site_name="left_foot",
-                foot_right_site_name="right_foot",
-                floor_threshold=0.00,
-            ),
-            ContactObservation.create(
-                physics_model=physics_model,
-                geom_names=["Left_Foot_collision_box", "Right_Foot_collision_box"],
-                contact_group="feet",
-                noise=0.0,
-            ),
-            TrueHeightObservation(),
+            ksim.JointPositionObservation(),
+            # TimestepPhaseObservation(),
+            # JointPositionObservation(noise=joint_pos_noise),
+            # ksim.JointVelocityObservation(noise=vel_obs_noise),
+            # ksim.ActuatorForceObservation(),
+            # ksim.SensorObservation.create(physics_model=physics_model, sensor_name="imu_acc", noise=imu_acc_noise),
+            # ksim.SensorObservation.create(physics_model=physics_model, sensor_name="imu_gyro", noise=imu_gyro_noise),
+            # ProjectedGravityObservation(noise=gvec_noise),
+            # LastActionObservation(noise=0.0),
+            # ksim.BasePositionObservation(noise=base_position_noise),
+            # ksim.BaseOrientationObservation(noise=base_orientation_noise),
+            # ksim.BaseLinearVelocityObservation(noise=base_linear_velocity_noise),
+            # ksim.BaseAngularVelocityObservation(noise=base_angular_velocity_noise),
+            # ksim.CenterOfMassVelocityObservation(),
+            # ksim.SensorObservation.create(physics_model=physics_model, sensor_name="left_foot_force", noise=0.0),
+            # ksim.SensorObservation.create(physics_model=physics_model, sensor_name="right_foot_force", noise=0.0),
+            # FeetContactObservation.create(
+            #     physics_model=physics_model,
+            #     foot_left_geom_names="Left_Foot_collision_box",
+            #     foot_right_geom_names="Right_Foot_collision_box",
+            #     floor_geom_names="floor",
+            # ),
+            # FeetPositionObservation.create(
+            #     physics_model=physics_model,
+            #     foot_left_site_name="left_foot",
+            #     foot_right_site_name="right_foot",
+            #     floor_threshold=0.00,
+            # ),
+            # ContactObservation.create(
+            #     physics_model=physics_model,
+            #     geom_names=["Left_Foot_collision_box", "Right_Foot_collision_box"],
+            #     contact_group="feet",
+            #     noise=0.0,
+            # ),
+            # TrueHeightObservation(),
         ]
 
     def get_commands(self, physics_model: ksim.PhysicsModel) -> list[ksim.Command]:
@@ -1005,20 +1007,21 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
 
     def get_rewards(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reward]:
         return [
-            # JointDeviationPenalty(scale=-1.0),
-            # JointDeviationPenalty(scale=-1.0),
-            # DHControlPenalty(scale=-0.05),
-            DHHealthyReward(scale=0.5),
-            # DHControlPenalty(scale=-0.01),
-            TerminationPenalty(scale=-5.0),
-            # LinearVelocityTrackingReward(scale=2.0),
-            # AngularVelocityTrackingReward(scale=0.75),
-            OrientationPenalty(scale=-2.0),
-            FeetContactPenalty(
-                contact_obs_key="contact_observation_feet",
-                scale=-2.0,
-            ),
-            NaiveVelocityReward(scale=1.0),
+            # # JointDeviationPenalty(scale=-1.0),
+            # # JointDeviationPenalty(scale=-1.0),
+            # # DHControlPenalty(scale=-0.05),
+            # DHHealthyReward(scale=0.5),
+            # # DHControlPenalty(scale=-0.01),
+            # TerminationPenalty(scale=-5.0),
+            # # LinearVelocityTrackingReward(scale=2.0),
+            # # AngularVelocityTrackingReward(scale=0.75),
+            # OrientationPenalty(scale=-2.0),
+            # FeetContactPenalty(
+            #     contact_obs_key="contact_observation_feet",
+            #     scale=-2.0,
+            # ),
+            # NaiveVelocityReward(scale=1.0),
+            ksim.StayAliveReward(scale=1.0),
         ]
 
     def get_terminations(self, physics_model: ksim.PhysicsModel) -> list[ksim.Termination]:
@@ -1039,25 +1042,25 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
     ) -> distrax.Normal:
-        timestep_phase_4 = observations["timestep_phase_observation"]
+        # timestep_phase_4 = observations["timestep_phase_observation"]
         joint_pos_n = observations["joint_position_observation"]
-        joint_vel_n = observations["joint_velocity_observation"]
-        imu_acc_3 = observations["sensor_observation_imu_acc"]
-        imu_gyro_3 = observations["sensor_observation_imu_gyro"]
-        lin_vel_cmd_2 = commands["linear_velocity_command"]
-        ang_vel_cmd_1 = commands["angular_velocity_command"]
-        gait_freq_cmd_1 = commands["gait_frequency_command"]
-        last_action_n = observations["last_action_observation"]
+        # joint_vel_n = observations["joint_velocity_observation"]
+        # imu_acc_3 = observations["sensor_observation_imu_acc"]
+        # imu_gyro_3 = observations["sensor_observation_imu_gyro"]
+        # lin_vel_cmd_2 = commands["linear_velocity_command"]
+        # ang_vel_cmd_1 = commands["angular_velocity_command"]
+        # gait_freq_cmd_1 = commands["gait_frequency_command"]
+        # last_action_n = observations["last_action_observation"]
         return model.actor.forward(
-            timestep_phase_4=timestep_phase_4,
+            # timestep_phase_4=timestep_phase_4,
             joint_pos_n=joint_pos_n,
-            joint_vel_n=joint_vel_n,
-            imu_acc_3=imu_acc_3,
-            imu_gyro_3=imu_gyro_3,
-            lin_vel_cmd_2=lin_vel_cmd_2,
-            ang_vel_cmd_1=ang_vel_cmd_1,
-            gait_freq_cmd_1=gait_freq_cmd_1,
-            last_action_n=last_action_n,
+            # joint_vel_n=joint_vel_n,
+            # imu_acc_3=imu_acc_3,
+            # imu_gyro_3=imu_gyro_3,
+            # lin_vel_cmd_2=lin_vel_cmd_2,
+            # ang_vel_cmd_1=ang_vel_cmd_1,
+            # gait_freq_cmd_1=gait_freq_cmd_1,
+            # last_action_n=last_action_n,
         )
 
     def _run_critic(
@@ -1066,48 +1069,48 @@ class ZbotWalkingTask(ZbotTask[ZbotWalkingTaskConfig, ZbotModel]):
         observations: FrozenDict[str, Array],
         commands: FrozenDict[str, Array],
     ) -> Array:
-        timestep_phase_4 = observations["timestep_phase_observation"]
+        # timestep_phase_4 = observations["timestep_phase_observation"]
         joint_pos_n = observations["joint_position_observation"]
-        joint_vel_n = observations["joint_velocity_observation"]
-        imu_acc_3 = observations["sensor_observation_imu_acc"]
-        imu_gyro_3 = observations["sensor_observation_imu_gyro"]
-        lin_vel_cmd_2 = commands["linear_velocity_command"]
-        ang_vel_cmd_1 = commands["angular_velocity_command"]
-        gait_freq_cmd = commands["gait_frequency_command"]
-        last_action_n = observations["last_action_observation"]
+        # joint_vel_n = observations["joint_velocity_observation"]
+        # imu_acc_3 = observations["sensor_observation_imu_acc"]
+        # imu_gyro_3 = observations["sensor_observation_imu_gyro"]
+        # lin_vel_cmd_2 = commands["linear_velocity_command"]
+        # ang_vel_cmd_1 = commands["angular_velocity_command"]
+        # gait_freq_cmd = commands["gait_frequency_command"]
+        # last_action_n = observations["last_action_observation"]
         # Critic obs
-        feet_colliding_2 = observations["contact_observation_feet"]
-        feet_contact_2 = observations["feet_contact_observation"]
-        feet_position_6 = observations["feet_position_observation"]
-        projected_gravity_3 = observations["projected_gravity_observation"]
-        base_position_3 = observations["base_position_observation"]
-        base_orientation_4 = observations["base_orientation_observation"]
-        base_linear_velocity_3 = observations["base_linear_velocity_observation"]
-        base_angular_velocity_3 = observations["base_angular_velocity_observation"]
-        actuator_force_n = observations["actuator_force_observation"]
-        true_height_1 = observations["true_height_observation"]
+        # feet_colliding_2 = observations["contact_observation_feet"]
+        # feet_contact_2 = observations["feet_contact_observation"]
+        # feet_position_6 = observations["feet_position_observation"]
+        # projected_gravity_3 = observations["projected_gravity_observation"]
+        # base_position_3 = observations["base_position_observation"]
+        # base_orientation_4 = observations["base_orientation_observation"]
+        # base_linear_velocity_3 = observations["base_linear_velocity_observation"]
+        # base_angular_velocity_3 = observations["base_angular_velocity_observation"]
+        # actuator_force_n = observations["actuator_force_observation"]
+        # true_height_1 = observations["true_height_observation"]
 
         return model.critic.forward(
-            timestep_phase_4=timestep_phase_4,
+            # timestep_phase_4=timestep_phase_4,
             joint_pos_n=joint_pos_n,
-            joint_vel_n=joint_vel_n,
-            imu_acc_3=imu_acc_3,
-            imu_gyro_3=imu_gyro_3,
-            lin_vel_cmd_2=lin_vel_cmd_2,
-            ang_vel_cmd_1=ang_vel_cmd_1,
-            gait_freq_cmd_1=gait_freq_cmd,
-            last_action_n=last_action_n,
-            # critic observations
-            feet_colliding_2=feet_colliding_2,
-            feet_contact_2=feet_contact_2,
-            feet_position_6=feet_position_6,
-            projected_gravity_3=projected_gravity_3,
-            base_position_3=base_position_3,
-            base_orientation_4=base_orientation_4,
-            base_linear_velocity_3=base_linear_velocity_3,
-            base_angular_velocity_3=base_angular_velocity_3,
-            actuator_force_n=actuator_force_n,
-            true_height_1=true_height_1,
+            # joint_vel_n=joint_vel_n,
+            # imu_acc_3=imu_acc_3,
+            # imu_gyro_3=imu_gyro_3,
+            # lin_vel_cmd_2=lin_vel_cmd_2,
+            # ang_vel_cmd_1=ang_vel_cmd_1,
+            # gait_freq_cmd_1=gait_freq_cmd,
+            # last_action_n=last_action_n,
+            # # critic observations
+            # feet_colliding_2=feet_colliding_2,
+            # feet_contact_2=feet_contact_2,
+            # feet_position_6=feet_position_6,
+            # projected_gravity_3=projected_gravity_3,
+            # base_position_3=base_position_3,
+            # base_orientation_4=base_orientation_4,
+            # base_linear_velocity_3=base_linear_velocity_3,
+            # base_angular_velocity_3=base_angular_velocity_3,
+            # actuator_force_n=actuator_force_n,
+            # true_height_1=true_height_1,
         )
 
     def get_ppo_variables(
@@ -1163,8 +1166,10 @@ if __name__ == "__main__":
             # Simulation parameters.
             dt=0.002,
             ctrl_dt=0.02,
+            iterations=8,
+            ls_iterations=8,
             max_action_latency=0.005,
-            min_action_latency=0.0,
+            # min_action_latency=0.0,
             # log_full_trajectory_every_n_steps=5,
             # log_full_trajectory_on_first_step=True,
             valid_every_n_steps=5,
@@ -1177,6 +1182,6 @@ if __name__ == "__main__":
             learning_rate=3e-4,
             clip_param=0.3,
             max_grad_norm=1.0,
-            export_for_inference=True,
+            export_for_inference=False,
         ),
     )
